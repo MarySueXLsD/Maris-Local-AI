@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/logo.png" width="112" alt="Maris logo: a violet game cartridge with a pixel M on its label">
+  <img src="docs/images/banner.gif" width="100%" alt="Animated pixel-art banner: the violet Maris cartridge drops into place, MARIS bounces in letter by letter, and the tagline types out: A private AI that runs on your PC. Nothing changes without your OK.">
 </p>
 
 # Maris — a private AI assistant for Windows
