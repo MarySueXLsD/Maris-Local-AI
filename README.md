@@ -6,7 +6,7 @@
 
 Maris runs entirely on your PC: chat, a coding agent that works on your projects, a PC assistant that can look at anything but **changes nothing without your approval**, long-term memory that learns, web browsing, and image/video generation — with the model picked automatically for each message based on the task and how busy your machine is.
 
-Built for an RTX 5070 Ti (16 GB) + Ryzen 7 9800X3D + 62 GB RAM, but it adapts to whatever is installed.
+It adapts to whatever is installed: the setup assistant scans the PC and picks models that run well on it, with or without a graphics card.
 
 > The source code and installer are not published here yet. For now this repository holds the overview and screenshots.
 
