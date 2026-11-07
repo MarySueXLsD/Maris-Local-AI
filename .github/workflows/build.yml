@@ -124,7 +124,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - uses: android-actions/setup-android@v3
+      # v3 installs the "tools" package, which Google removed in September 2026 (sdkmanager then fails).
+      - uses: android-actions/setup-android@v4
       - run: npm ci
       - run: npm ci
         working-directory: mobile
