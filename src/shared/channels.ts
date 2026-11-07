@@ -46,6 +46,8 @@ export const API_CHANNELS = {
   },
   system: {
     status: 'system:status',
+    gpuPrograms: 'system:gpuPrograms',
+    endProgram: 'system:endProgram',
     onStatus: 'system:status'
   },
   settings: {

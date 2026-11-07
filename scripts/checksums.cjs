@@ -1,6 +1,7 @@
 // Writes SHA256SUMS-<platform>.txt next to the installers in a release folder: the fingerprints people can
 // check a download against, and that antivirus false-positive forms ask for.
-// Usage: node scripts/checksums.cjs release/windows
+// Usage: node scripts/checksums.cjs release/windows [name]
+// The optional name keeps the files of two builds that share a folder name apart (linux-x64, linux-arm64).
 const { createHash } = require('node:crypto')
 const { createReadStream, readdirSync, statSync, writeFileSync } = require('node:fs')
 const path = require('node:path')
@@ -32,7 +33,7 @@ function sha256(file) {
   }
   const lines = []
   for (const f of [...files, ...extra]) lines.push(`${await sha256(path.join(dir, f))}  ${f.replace(/\\/g, '/')}`)
-  const name = `SHA256SUMS-${path.basename(dir)}.txt`
+  const name = `SHA256SUMS-${process.argv[3] ?? path.basename(dir)}.txt`
   writeFileSync(path.join(dir, name), `${lines.join('\n')}\n`)
   console.log(`${name}:\n${lines.join('\n')}`)
 })()

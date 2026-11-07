@@ -29,6 +29,7 @@ import { relativeDay } from '../lib/format'
 import { useApp, type View } from '../store'
 import { MarisMark } from './MarisMark'
 import { NewProjectDialog, ProjectsTree } from './ProjectsTree'
+import { RestartToUpdate } from './UpdateNow'
 import { Button, cn, IconButton, Tip } from './ui'
 import { DEVICE, keys, REMOTE, TOUCH } from '../lib/platform'
 
@@ -168,6 +169,7 @@ export function Sidebar() {
   const toggleSidebar = useApp((s) => s.toggleSidebar)
   const showAdmin = useApp((s) => Boolean(s.settings?.updates.admin) && !REMOTE)
   const updateReady = useApp((s) => Boolean(s.updateState?.available))
+  const readyVersion = useApp((s) => (s.updateState?.ready ? s.updateState.available?.version : undefined))
   const newsBadge = useApp((s) => (s.newsState?.unread ?? 0) + (s.updateState?.available ? 1 : 0))
   const unread = useApp((s) => s.unread)
   const [query, setQuery] = useState('')
@@ -302,6 +304,7 @@ export function Sidebar() {
       </nav>
 
       <div className="space-y-px border-t border-line px-3 py-2">
+        {readyVersion && !REMOTE && <RestartToUpdate pill version={readyVersion} />}
         {[...NAV, ...(showAdmin ? [ADMIN_NAV] : [])].map(({ view: v, label, icon: Icon, tip }) => (
           <Tip key={v} label={tip} side="right">
             <button

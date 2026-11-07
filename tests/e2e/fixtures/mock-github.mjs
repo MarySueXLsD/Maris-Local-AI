@@ -14,6 +14,9 @@ export async function startMockGitHub({ repo = 'test/maris', branch = 'main', to
   trees.set('t0', new Map())
   let release
   const commitLog = []
+  /** The installer every download returns, and the SHA256SUMS lists of the current release. */
+  const INSTALLER = Buffer.alloc(200_000, 7)
+  const sums = new Map()
 
   const sha = (b) => createHash('sha1').update(b).digest('hex')
   const send = (res, status, body, type = 'application/json') => {
@@ -38,7 +41,11 @@ export async function startMockGitHub({ repo = 'test/maris', branch = 'main', to
         const f = files.get(p.slice(`/raw/${repo}/${branch}/`.length))
         return f ? send(res, 200, f, 'application/octet-stream') : send(res, 404, 'Not found', 'text/plain')
       }
-      if (p.startsWith('/download/')) return send(res, 200, Buffer.alloc(200_000, 7), 'application/octet-stream')
+      if (p.startsWith('/download/')) {
+        const name = p.slice('/download/'.length)
+        if (sums.has(name)) return send(res, 200, sums.get(name), 'text/plain')
+        return send(res, 200, INSTALLER, 'application/octet-stream')
+      }
       if (p === '/api/user') return authed(req) ? send(res, 200, { login }) : send(res, 401, { message: 'Bad credentials' })
       if (p === base) return send(res, 200, { full_name: repo, private: false, permissions: authed(req) ? { push: true } : undefined })
       if (p === `${base}/releases/latest`) return release ? send(res, 200, release) : send(res, 404, { message: 'Not Found' })
@@ -46,8 +53,16 @@ export async function startMockGitHub({ repo = 'test/maris', branch = 'main', to
         const path = p.slice(`${base}/contents/`.length)
         const f = files.get(path)
         if (f) return send(res, 200, { path, content: f.toString('base64'), encoding: 'base64' })
-        const inside = [...files.keys()].filter((k) => k.startsWith(`${path}/`) && !k.slice(path.length + 1).includes('/'))
-        return inside.length ? send(res, 200, inside.map((k) => ({ path: k, type: 'file' }))) : send(res, 404, { message: 'Not Found' })
+        // Like GitHub: files and folders directly inside, with names and blob ids.
+        const below = [...files.keys()].filter((k) => k.startsWith(`${path}/`))
+        const items = new Map()
+        for (const k of below) {
+          const rest = k.slice(path.length + 1)
+          const name = rest.split('/')[0]
+          if (rest.includes('/')) items.set(name, { name, path: `${path}/${name}`, type: 'dir', sha: sha(name) })
+          else items.set(name, { name, path: k, type: 'file', sha: sha(files.get(k)) })
+        }
+        return items.size ? send(res, 200, [...items.values()]) : send(res, 404, { message: 'Not Found' })
       }
       if (!authed(req) && req.method !== 'GET') return send(res, 401, { message: 'Bad credentials' })
       if (p === `${base}/git/ref/heads/${branch}`) return send(res, 200, { object: { sha: head } })
@@ -102,15 +117,28 @@ export async function startMockGitHub({ repo = 'test/maris', branch = 'main', to
     files.set(path, data)
     trees.get(commits.get(head).tree).set(path, data)
   }
-  const setRelease = (version, assets) => {
+  /** sums: 'good' publishes SHA256SUMS-windows.txt with the installers' real fingerprints, 'bad' a wrong one. */
+  const setRelease = (version, assets, { sums: kind } = {}) => {
+    sums.clear()
+    if (kind) {
+      const hash = kind === 'good' ? createHash('sha256').update(INSTALLER).digest('hex') : 'f'.repeat(64)
+      sums.set('SHA256SUMS-windows.txt', `${assets.map((a) => `${hash}  ${a}`).join('\n')}\n`)
+    }
     release = {
       tag_name: `v${version}`,
       name: `Maris ${version}`,
       body: `## What is new\n\n- Skills and connectors\n- Updates & news`,
       html_url: `${origin}/releases/v${version}`,
       published_at: new Date().toISOString(),
-      assets: assets.map((name) => ({ name, browser_download_url: `${origin}/download/${name}`, size: 200_000 }))
+      assets: [
+        ...assets.map((name) => ({ name, browser_download_url: `${origin}/download/${name}`, size: INSTALLER.length })),
+        ...[...sums.entries()].map(([name, text]) => ({ name, browser_download_url: `${origin}/download/${name}`, size: Buffer.byteLength(text) }))
+      ]
     }
   }
-  return { origin, files, seed, setRelease, commitLog, close: () => server.close() }
+  const clearRelease = () => {
+    release = undefined
+    sums.clear()
+  }
+  return { origin, files, seed, setRelease, clearRelease, commitLog, close: () => server.close() }
 }

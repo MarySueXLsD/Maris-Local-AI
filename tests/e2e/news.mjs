@@ -2,7 +2,7 @@
 // Uses a local stand-in for GitHub (fixtures/mock-github.mjs), never the real repository.
 // Usage: npm run build && node tests/e2e/news.mjs <shotsDir>   (MARIS_EXE=<Maris.exe> for a packaged build)
 import { _electron as electron } from 'playwright-core'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -45,7 +45,13 @@ function png(w, h, [r, g, b]) {
 }
 
 const gh = await startMockGitHub()
-gh.setRelease('9.9.9', ['Maris-Setup-9.9.9.exe', 'Maris-9.9.9-arm64.dmg', 'Maris-9.9.9-x86_64.AppImage'])
+const ASSETS = (v) => [`Maris-Setup-${v}.exe`, `Maris-${v}-arm64.dmg`, `Maris-${v}-x86_64.AppImage`]
+// First a release whose published fingerprint does not match its installer: it must not be used.
+gh.setRelease('9.9.8', ASSETS('9.9.8'), { sums: 'bad' })
+// Posts written as plain Markdown files in git, next to the ones the Admin page lists in index.json.
+gh.seed('news/2026-11-05-plain-post.md', '# Plain Markdown post\n\nWritten straight into the news folder in git.\n\n- one\n- two\n')
+gh.seed('news/README.md', '# The news folder\n\nHow to write posts.\n')
+gh.seed('news/posts/2026-11-03-by-hand.md', '---\ntitle: Added by hand\ndate: 2026-11-03\nsummary: Put into news/posts without the Admin page.\n---\nSome text.\n')
 gh.seed('news/images/2026-11-01-welcome/cover.png', png(320, 180, [124, 92, 255]))
 gh.seed('news/posts/2026-11-01-welcome.md', '## Hello\n\nThis is the first post, with a picture:\n\n![violet](images/2026-11-01-welcome/cover.png)\n')
 gh.seed(
@@ -60,13 +66,13 @@ const picture = path.join(os.tmpdir(), `maris-test-picture-${Date.now()}.png`)
 writeFileSync(picture, png(200, 120, [240, 168, 64]))
 
 const packaged = process.env.MARIS_EXE
-const app = await electron.launch({
+let app = await electron.launch({
   executablePath: packaged ?? process.env.MARIS_ELECTRON ?? (await import('electron')).default,
   args: packaged ? [] : [root],
   env: { ...process.env, MARIS_USER_DATA: profile, MARIS_GITHUB_API: `${gh.origin}/api`, MARIS_GITHUB_RAW: `${gh.origin}/raw`, ELECTRON_ENABLE_LOGGING: '1' },
   timeout: 60000
 })
-const win = await app.firstWindow()
+let win = await app.firstWindow()
 const logs = []
 win.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`))
 const shot = async (name) => {
@@ -89,22 +95,55 @@ try {
   await win.evaluate(() => Promise.all([window.maris.updates.check(), window.maris.news.refresh()]))
   await win.waitForTimeout(800)
 
-  // ---- Sidebar badge and the update card
+  // ---- A download that does not match the release's SHA256SUMS is refused
+  const refused = await win
+    .waitForFunction(async () => /fingerprint/.test((await window.maris.updates.state()).error ?? ''), null, { timeout: 20000 })
+    .then(() => true)
+    .catch(() => false)
+  const st0 = await win.evaluate(() => window.maris.updates.state())
+  check(refused && !st0.ready, `a download with the wrong fingerprint is not used (${st0.error ?? 'no error'})`)
+  const updates = path.join(profile, 'updates')
+  check(!existsSync(updates) || readdirSync(updates).length === 0, 'and nothing of it is left on disk')
+
+  // ---- The real release: found, downloaded in the background and checked, ready to install
+  gh.setRelease('9.9.9', ASSETS('9.9.9'), { sums: 'good' })
+  await win.evaluate(() => window.maris.updates.check())
+  const ready = await win
+    .waitForFunction(async () => (await window.maris.updates.state()).ready === true, null, { timeout: 30000 })
+    .then(() => true)
+    .catch(() => false)
+  const st1 = await win.evaluate(() => window.maris.updates.state())
+  check(ready && st1.available?.version === '9.9.9', `9.9.9 got ready in the background without a click (${st1.error ?? 'ok'})`)
+  const files = existsSync(updates) ? readdirSync(updates) : []
+  check(files.length === 1 && files[0] === 'Maris-Setup-9.9.9.exe' && statSync(path.join(updates, files[0])).size === 200_000, `the checked installer is kept, no partial files (${files.join(', ')})`)
+
+  // ---- Sidebar: the badge and the restart button; the update card
   const nav = win.getByRole('button', { name: /Updates & news/ })
   check(/New/.test(await nav.innerText()), `sidebar shows a badge: ${(await nav.innerText()).replace(/\s+/g, ' ')}`)
+  const pill = win.getByRole('button', { name: /Restart to update/ })
+  check(await pill.isVisible().catch(() => false), `the sidebar offers "Restart to update" (${await pill.innerText().catch(() => 'missing')})`)
   await nav.click()
-  await win.getByText('Maris 9.9.9 is available').waitFor({ timeout: 10000 })
-  check(true, 'update card: Maris 9.9.9 is available')
+  await win.getByText('Maris 9.9.9 is ready to install').waitFor({ timeout: 10000 })
+  check(true, 'update card: Maris 9.9.9 is ready to install')
+  check(await win.getByRole('button', { name: 'Restart and update' }).isVisible(), '"Restart and update" offered (not clicked: the test never runs an installer)')
+  check(await win.getByText(/updates itself in about a minute/).isVisible(), 'the card says what restarting does')
   check(await win.getByText('Welcome to Maris news').isVisible(), 'post listed')
+  check(await win.getByText('Plain Markdown post').isVisible(), 'a plain Markdown file in the news folder is a post')
+  check(await win.getByText('Written straight into the news folder in git.').isVisible(), 'its first paragraph is the summary')
+  check(await win.getByText('Added by hand').isVisible(), 'a file added to news/posts by hand is a post')
+  const listed = await win.evaluate(() => window.maris.news.state().then((s) => s.posts.map((p) => p.file)))
+  check(!listed.some((f) => /readme/i.test(f)) && listed.length === 3, `README.md is not a post (${listed.join(', ')})`)
   check(await win.locator('li img').first().isVisible().catch(() => false), 'post cover picture shown')
   await win.getByRole('button', { name: 'What is new' }).click()
   check(await win.getByText('Skills and connectors').isVisible(), 'release notes shown')
   await shot('news-01-list')
 
-  // ---- Download the update (not installed in the test)
-  await win.getByRole('button', { name: /^Download/ }).click()
-  await win.getByRole('button', { name: 'Install now' }).waitFor({ timeout: 20000 })
-  check(true, 'update downloaded; "Install now" offered')
+  // ---- Read the plain Markdown post: its heading becomes the title, not a second heading
+  await win.getByText('Plain Markdown post').click()
+  await win.getByRole('heading', { name: 'Plain Markdown post' }).first().waitFor({ timeout: 10000 })
+  check((await win.getByRole('heading', { name: 'Plain Markdown post' }).count()) === 1, 'the title shows once')
+  check(await win.locator('article .prose-maris li').first().isVisible(), 'its Markdown is shown (a list)')
+  await win.getByRole('button', { name: 'All posts' }).click()
 
   // ---- Read a post: text and picture
   await win.getByText('Welcome to Maris news').click()
@@ -113,7 +152,16 @@ try {
   await shot('news-02-post')
   await win.getByRole('button', { name: 'All posts' }).click()
   const st = await win.evaluate(() => window.maris.news.state())
-  check(st.unread === 0, 'opened post counts as read')
+  check(st.posts.filter((p) => !p.unread).map((p) => p.id).sort().join() === '2026-11-01-welcome,2026-11-05-plain-post', 'opened posts count as read')
+
+  // ---- A half-written index.json for a moment keeps the posts it listed (and the Markdown ones)
+  const goodIndex = gh.files.get('news/index.json')
+  gh.seed('news/index.json', '{ "posts": [ broken')
+  await win.evaluate(() => window.maris.news.refresh())
+  const kept = await win.evaluate(() => window.maris.news.state().then((s) => s.posts.map((p) => p.id)))
+  check(kept.includes('2026-11-01-welcome') && kept.includes('2026-11-05-plain-post') && kept.length === 3, `a broken index.json keeps the last good list (${kept.join(', ')})`)
+  gh.seed('news/index.json', goodIndex)
+  await win.evaluate(() => window.maris.news.refresh())
 
   // ---- Admin: token, write a post with a picture, publish
   await win.evaluate(() => window.maris.settings.set({ updates: { admin: true } }))
@@ -162,6 +210,32 @@ try {
   await win.getByText(/Post removed/).waitFor({ timeout: 20000 })
   const index3 = JSON.parse(gh.files.get('news/index.json').toString())
   check(index3.posts.length === 1 && !gh.files.has(`news/${post.file}`) && ![...gh.files.keys()].some((k) => k.startsWith(`news/images/${post.id}/`)), 'removed: post, pictures and list entry')
+
+  // ---- A Markdown post in the Admin list: no editor, but it can be removed (its file is deleted)
+  const plainRow = win.locator('li', { hasText: 'Plain Markdown post' })
+  check(await plainRow.getByText('Markdown file in git').isVisible(), 'the Admin page marks Markdown posts as files in git')
+  await win.getByRole('button', { name: 'Remove Plain Markdown post' }).click()
+  await win.getByRole('button', { name: /Remove for everyone/ }).click()
+  await plainRow.waitFor({ state: 'detached', timeout: 20000 })
+  check(!gh.files.has('news/2026-11-05-plain-post.md') && JSON.parse(gh.files.get('news/index.json').toString()).posts.length === 1, 'removed: the Markdown file, index.json untouched')
+  await shot('news-05-admin-files')
+
+  // ---- Started by its own update: says so, and the used installer is cleaned up
+  await app.close()
+  gh.clearRelease()
+  app = await electron.launch({
+    executablePath: packaged ?? process.env.MARIS_ELECTRON ?? (await import('electron')).default,
+    args: packaged ? ['--updated'] : [root, '--updated'],
+    env: { ...process.env, MARIS_USER_DATA: profile, MARIS_GITHUB_API: `${gh.origin}/api`, MARIS_GITHUB_RAW: `${gh.origin}/raw` },
+    timeout: 60000
+  })
+  win = await app.firstWindow()
+  await win.locator('textarea[aria-label="Message Maris"]').waitFor({ timeout: 30000 })
+  await win.getByRole('button', { name: /Updates & news/ }).click()
+  check(await win.getByText(/Maris updated itself to/).waitFor({ timeout: 10000 }).then(() => true).catch(() => false), 'after an update Maris says it updated itself')
+  await win.waitForTimeout(500)
+  check(!existsSync(updates) || readdirSync(updates).length === 0, 'the installer it used is deleted')
+  await shot('news-06-updated')
 } catch (e) {
   failures++
   console.error('ERROR', e)

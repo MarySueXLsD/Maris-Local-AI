@@ -42,6 +42,7 @@ import type {
   SetupPlan,
   SetupProgress,
   SystemStatus,
+  GpuProgramList,
   TerminalCommandStatus,
   ThinkMode
 } from '@shared/types'
@@ -130,6 +131,10 @@ export interface MarisApi {
   }
   system: {
     status(): Promise<SystemStatus>
+    /** Programs using video memory, biggest first (Maris's own and the system's left out of the list). */
+    gpuPrograms(): Promise<GpuProgramList>
+    /** End a program from that list, with its helper processes. Only after the person confirmed it. */
+    endProgram(pid: number): Promise<void>
     onStatus(cb: (s: SystemStatus) => void): Off
   }
   settings: {

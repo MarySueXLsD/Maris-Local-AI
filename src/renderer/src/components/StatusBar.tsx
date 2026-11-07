@@ -1,4 +1,4 @@
-import { Cpu, Gauge, MemoryStick, MonitorCog, Power, ShieldCheck, Thermometer, Zap } from 'lucide-react'
+import { Cpu, Gauge, MemoryStick, Power, ShieldCheck, Thermometer, Zap } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { api } from '../lib/api'
 import { gb, prettyModel } from '../lib/format'
@@ -7,6 +7,7 @@ import { cn, Tip } from './ui'
 import { IS_MAC, IS_WIN } from '../lib/platform'
 import { KIND_SHORT } from '@shared/approval'
 import { autoApproveSummary, AutoApprovePopover, useAutoApprove } from './AutoApprove'
+import { VramSeg } from './VramDetails'
 
 const BUSY_WORD = { idle: 'Idle', light: 'Light load', busy: 'Busy', heavy: 'Heavy load' } as const
 const STARTED = Date.now()
@@ -79,9 +80,10 @@ export function StatusBar() {
   const [starting, setStarting] = useState(false)
   if (!s) return <footer className="h-7 shrink-0 border-t border-line bg-side" />
   const g = s.gpu
-  const ours = s.ollama.loaded.reduce((n, m) => n + m.vramBytes, 0) / 2 ** 20
   const total = g?.memTotalMB || 1
   const used = g?.memUsedMB ?? 0
+  // Maris's share: its language models and its picture engine (everything the monitor does not count as other programs).
+  const ours = Math.max(0, used - Math.min(used, s.external.vramMB))
   const loaded = s.ollama.loaded
   const working = s.activeJobs.llm > 0 || s.activeJobs.media > 0
   return (
@@ -105,20 +107,7 @@ export function StatusBar() {
             GPU {g.utilization}%
             <Bar value={g.utilization / 100} />
           </Seg>
-          {show?.vram !== false && <Seg
-            icon={<MonitorCog size={12} aria-hidden />}
-            tip={
-              <span className="block space-y-0.5">
-                <span className="block font-medium">Video memory (VRAM) on the graphics card</span>
-                <span className="block">Maris models: {gb(ours)}</span>
-                <span className="block">Other programs: {gb(Math.max(0, used - ours))}</span>
-                <span className="block">Free: {gb(Math.max(0, total - used))}</span>
-              </span>
-            }
-          >
-            VRAM {gb(used)} / {gb(total)}
-            <Bar value={used / total} ours={ours / total} />
-          </Seg>}
+          {show?.vram !== false && <VramSeg s={s} g={g} bar={<Bar value={used / total} ours={ours / total} />} />}
           {show?.temp !== false && g.temperatureC !== undefined && (
             <Seg icon={<Thermometer size={12} aria-hidden />} tip="Graphics card temperature. Up to about 83°C is normal under load." tone={g.temperatureC >= 83 ? 'warn' : undefined}>
               {g.temperatureC}°C

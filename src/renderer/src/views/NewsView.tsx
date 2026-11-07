@@ -1,9 +1,10 @@
-import { ArrowLeft, CheckCheck, Download, ExternalLink, Pin, RefreshCw, Rocket, Sparkles } from 'lucide-react'
+import { ArrowLeft, CheckCheck, Download, ExternalLink, PartyPopper, Pin, RefreshCw, Rocket, Sparkles } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { NewsPostContent, NewsState, UpdateState } from '@shared/extensions'
 import { MediaImg } from '../components/Media'
 import { Markdown } from '../components/Markdown'
 import { Button, cn, PageHeader, Progress, Section, Spinner } from '../components/ui'
+import { RestartToUpdate, UPDATE_HOW } from '../components/UpdateNow'
 import { api } from '../lib/api'
 import { timeAgo } from '../lib/format'
 import { REMOTE } from '../lib/platform'
@@ -66,23 +67,37 @@ export function NewsView() {
   )
 }
 
+/** Shown once after Maris updated itself. */
+function JustUpdated({ version }: { version: string }) {
+  return (
+    <p className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-petal/50 bg-petal-soft px-4 py-3 text-[0.9rem] text-text" role="status">
+      <PartyPopper size={16} className="text-petal" aria-hidden />
+      <span>Maris updated itself to {version}. Your chats, memories, models and settings came along.</span>
+    </p>
+  )
+}
+
 function UpdateCard({ u }: { u: UpdateState }) {
   const [showNotes, setShowNotes] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const auto = useApp((s) => s.settings?.updates.autoDownload !== false)
   const a = u.available
   if (!a) {
     return (
-      <p className="mb-6 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-raised/60 px-4 py-3 text-[0.9rem] text-text-2">
-        <Sparkles size={16} className="text-petal" aria-hidden />
-        <span>
-          Maris {u.current} is the newest version
-          {u.checkedAt ? ` (checked ${timeAgo(u.checkedAt)})` : ''}.
-        </span>
-        {u.offline && <span className="text-text-3">Offline right now.</span>}
-        {u.error && <span className="text-danger">{u.error}</span>}
-      </p>
+      <>
+        {u.justUpdated && <JustUpdated version={u.justUpdated} />}
+        <p className="mb-6 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-raised/60 px-4 py-3 text-[0.9rem] text-text-2">
+          <Sparkles size={16} className="text-petal" aria-hidden />
+          <span>
+            Maris {u.current} is the newest version
+            {u.checkedAt ? ` (checked ${timeAgo(u.checkedAt)})` : ''}.
+          </span>
+          {u.offline && <span className="text-text-3">Offline right now.</span>}
+          {u.error && <span className="text-danger">{u.error}</span>}
+        </p>
+      </>
     )
   }
+  const size = a.asset ? `${Math.max(1, Math.round(a.asset.size / 2 ** 20))} MB` : ''
   return (
     <section className="mb-6 overflow-hidden rounded-2xl border border-petal/50 bg-petal-soft" aria-label="Update available">
       <div className="flex flex-wrap items-start gap-4 p-4">
@@ -90,34 +105,26 @@ function UpdateCard({ u }: { u: UpdateState }) {
           <Rocket size={20} aria-hidden />
         </span>
         <div className="min-w-0 flex-1">
-          <h2 className="text-[1.1rem] font-semibold text-text">{a.name || `Maris ${a.version}`} is available</h2>
+          <h2 className="text-[1.1rem] font-semibold text-text">
+            {a.name || `Maris ${a.version}`} {u.ready && !REMOTE ? 'is ready to install' : 'is available'}
+          </h2>
           <p className="text-[0.88rem] text-text-2">
             You have {u.current}. Published {longDate(a.publishedAt)}.
           </p>
           {u.downloading !== undefined && (
             <div className="mt-3 max-w-sm">
-              <Progress value={u.downloading} label="Downloading the update" />
+              <Progress value={u.downloading} label={`Getting it ready in the background (${size})`} />
             </div>
           )}
           {u.error && <p className="mt-2 text-[0.86rem] text-danger">{u.error}</p>}
           <div className="mt-3 flex flex-wrap gap-2">
             {REMOTE ? (
               <span className="text-[0.86rem] text-text-2">Install it on the computer.</span>
-            ) : u.downloaded ? (
-              <Button
-                variant="primary"
-                size="sm"
-                disabled={busy}
-                onClick={() => {
-                  setBusy(true)
-                  void api.updates.install().finally(() => setBusy(false))
-                }}
-              >
-                <Rocket size={14} /> Install now
-              </Button>
-            ) : a.asset ? (
-              <Button variant="primary" size="sm" disabled={u.downloading !== undefined} onClick={() => void api.updates.download()}>
-                <Download size={14} /> Download ({Math.max(1, Math.round(a.asset.size / 2 ** 20))} MB)
+            ) : u.ready ? (
+              <RestartToUpdate />
+            ) : a.asset && u.downloading === undefined ? (
+              <Button variant="primary" size="sm" onClick={() => void api.updates.download().catch(() => undefined)}>
+                <Download size={14} /> {u.error ? 'Try again' : auto ? `Get it ready now (${size})` : `Download (${size})`}
               </Button>
             ) : null}
             <Button variant="outline" size="sm" onClick={() => void api.updates.openRelease()}>
@@ -129,13 +136,8 @@ function UpdateCard({ u }: { u: UpdateState }) {
               </Button>
             )}
           </div>
-          {u.downloaded && !REMOTE && (
-            <p className="mt-2 text-[0.8rem] text-text-3">
-              {navigator.userAgent.includes('Windows')
-                ? 'Maris closes and the installer opens. Your chats, memories and models stay.'
-                : 'The new version opens next to this one; replace Maris with it.'}
-            </p>
-          )}
+          {!REMOTE && (u.ready || u.downloading !== undefined) && <p className="mt-2 text-[0.8rem] text-text-2">{UPDATE_HOW}</p>}
+          {!REMOTE && !a.asset && <p className="mt-2 text-[0.8rem] text-text-2">This release has no installer for this computer; the release page has its files.</p>}
         </div>
       </div>
       {showNotes && (

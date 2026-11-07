@@ -48,6 +48,8 @@ const BLOCKED = new Set([
   // Updates install on the computer itself; skills from a folder use a dialog there.
   'updates:install',
   'updates:download',
+  // Ending programs on the computer needs someone at the computer.
+  'system:endProgram',
   'skills:pickFolder',
   // The terminal command belongs to this computer.
   'cli:show',

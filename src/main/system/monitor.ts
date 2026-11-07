@@ -176,6 +176,11 @@ class SystemMonitor {
 
   private startSmi(intervalMs: number): void {
     if (this.stopped) return
+    // Tests: a fixed GPU reading instead of the real card.
+    if (process.env.MARIS_TEST_GPU) {
+      this.gpu = JSON.parse(process.env.MARIS_TEST_GPU) as GpuStatus
+      return
+    }
     try {
       const p = spawn(
         'nvidia-smi',

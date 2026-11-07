@@ -339,21 +339,25 @@ With web access off, nothing leaves your ${DEVICE}.`
     id: 'updates',
     title: 'Updates and news',
     category: 'Using Maris',
-    summary: 'How Maris tells you about a new version, installing it, and the news posts.',
-    keywords: 'update new version upgrade install download release news posts blog announcements check badge',
-    body: `While your ${DEVICE} is online, Maris looks for a new version and new posts a few times a day. When there is something new, **Updates & news** in the sidebar gets a badge.
+    summary: 'How Maris updates itself, and the news posts.',
+    keywords: 'update new version upgrade install download release restart news posts blog announcements check badge markdown',
+    body: `You install Maris once. After that it updates itself from inside the app: there is no second installer to download or click through.
+
+While your ${DEVICE} is online, Maris looks for a new version and new posts a few times a day. When it finds a new version, it downloads it in the background and checks it against the fingerprint (SHA-256) published with the release; a download that does not match is thrown away.
 
 ## Installing an update
 
-1. Open **Updates & news**. The box at the top says which version is ready; **What is new** lists the changes.
-2. Press **Download**. Nothing on your ${DEVICE} changes yet.
-3. Press **Install now**. ${IS_WIN ? 'Maris closes and the installer starts. Your chats, memories and settings stay as they are.' : IS_MAC ? 'The disk image opens. Drag Maris into Applications, replacing the old copy, and start it again. Your chats, memories and settings stay as they are.' : 'The folder with the new AppImage opens. Start the new file instead of the old one. Your chats, memories and settings stay as they are.'}
+1. When the new version is ready, **Restart to update** appears at the bottom of the sidebar, and **Updates & news** shows it with **What is new**.
+2. Press **Restart to update** (or **Restart and update** on the Updates & news page). ${IS_WIN ? 'Maris closes, updates itself in about a minute without any setup windows, and opens again. If Maris is installed for all users, Windows asks for permission once.' : IS_MAC ? 'The disk image opens: drag Maris into Applications, replacing the old copy, and start it again.' : 'Maris replaces its AppImage and restarts on the new version.'}
+3. Your chats, memories, models and settings stay as they are. Updates & news says **Maris updated itself** when it is done.
 
-Nothing is ever installed without you pressing **Install now**.
+If Maris is still writing an answer or making a picture, it asks before restarting. Nothing is installed until you press the button. To download only when you choose, turn off Settings → Updates and news → **Get new versions ready in the background**.
 
 ## News
 
 Below the update box are posts from the people who make Maris: new features, tips and notes about updates. Posts you have not opened yet are marked **New**. Pictures are kept on your ${DEVICE}, so posts you have read also open offline.
+
+The posts come from the **news** folder of Maris's repository on GitHub: the ones written on the Admin page, and any Markdown file (\`.md\`) put into that folder in git. A file's first heading becomes the post's title, the date at the start of its name (2026-11-05-name.md) its date, and its first paragraph the summary.
 
 ## Changing how often Maris looks
 
@@ -542,7 +546,7 @@ Downloads run one after another. You can start using Maris right away; models sw
 - **CPU**: how busy the processor is.
 - **RAM**: system memory in use.
 - **GPU**: how busy the graphics card is.
-- **VRAM**: graphics memory in use. Point at it to see how much belongs to Maris and how much to other programs.
+- **VRAM**: graphics memory in use. Point at it to see how much belongs to Maris and how much to other programs. When other programs fill half of it or more, it also lists the three that use the most, each with an **×** to end it (like End task in Task Manager). Maris asks before ending anything, and never offers to end parts of ${IS_WIN ? 'Windows' : 'the system'} itself.
 - **Temperature** and **power** of the graphics card.
 - On the right: whether Maris is **idle** or **working**, and which models are loaded.
 

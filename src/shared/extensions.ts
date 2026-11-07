@@ -17,6 +17,8 @@ export interface UpdateInfo {
   publishedAt: string
   /** The installer for this system, when the release has one. */
   asset?: UpdateAsset
+  /** SHA256SUMS files of the release: the download is checked against them before it is used. */
+  checksums?: UpdateAsset[]
 }
 
 export interface UpdateState {
@@ -27,6 +29,10 @@ export interface UpdateState {
   /** Download of the installer: 0..1, then the local file. */
   downloading?: number
   downloaded?: string
+  /** The downloaded update was checked and can be installed (Restart and update). */
+  ready?: boolean
+  /** Maris just updated itself to this version (it was started by the update). */
+  justUpdated?: string
   error?: string
   /** No internet, or the update source could not be reached. */
   offline?: boolean
@@ -52,6 +58,8 @@ export interface NewsEntry {
   version?: string
   pinned?: boolean
   author?: string
+  /** 'file': a Markdown file put straight into the news folder in git (not listed in index.json). */
+  source?: 'file'
 }
 
 export interface NewsIndex {

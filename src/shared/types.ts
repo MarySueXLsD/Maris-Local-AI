@@ -121,6 +121,34 @@ export interface SystemStatus {
   activeJobs: { llm: number; media: number }
 }
 
+/** A program using video memory, as the status bar's VRAM details list it. */
+export interface GpuProgram {
+  /** Its main process: ending it ends its helper processes too. */
+  pid: number
+  /** The name people know it by ("Google Chrome"), else its file name. */
+  name: string
+  /** The program file (chrome.exe). */
+  exe: string
+  /** What it runs, when that tells programs apart: the script for Python or Node, for example. */
+  detail?: string
+  /** Video memory of the program and its helper processes. */
+  vramMB: number
+  /** Other programs it started, which end with it (a launcher's games, a terminal's scripts). */
+  alsoEnds?: string[]
+}
+
+/** Who uses the graphics card's memory besides Maris. */
+export interface GpuProgramList {
+  /** False where the system does not say which program uses how much (macOS, most non-NVIDIA cards on Linux). */
+  supported: boolean
+  /** Biggest first. Programs Maris may offer to end. */
+  programs: GpuProgram[]
+  /** Parts of the system (the desktop, drivers, services): shown, never offered for ending. */
+  system: { vramMB: number; names: string[] }
+  error?: string
+  ts: number
+}
+
 // ---------------------------------------------------------------- routing
 
 export interface RouteDecision {
@@ -799,6 +827,8 @@ export interface Settings {
   updates: {
     /** Look for new versions while online. */
     check: boolean
+    /** Download a new version in the background as soon as it is found (it installs only on your click). */
+    autoDownload: boolean
     /** Hours between checks. */
     intervalHours: number
     /** owner/name of the GitHub repository that publishes Maris. */

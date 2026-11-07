@@ -74,7 +74,7 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   persona: { assistantName: 'Maris', responseStyle: 'balanced', explain: 'everyone' },
   system: { monitorIntervalSec: 2 },
-  updates: { check: true, intervalHours: 6, repo: 'MarySueXLsD/Maris-Local-AI', news: true, admin: false },
+  updates: { check: true, autoDownload: true, intervalHours: 6, repo: 'MarySueXLsD/Maris-Local-AI', news: true, admin: false },
   extensions: { skills: true, connectors: true },
   link: { enabled: false, port: 7341, allowApprovals: true },
   onboarded: false

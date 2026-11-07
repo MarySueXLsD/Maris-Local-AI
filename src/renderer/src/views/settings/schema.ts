@@ -300,6 +300,7 @@ export const SETTINGS_SCHEMA: SettingDef[] = [
 
   // ------------------------------------------------------------- updates and news
   { path: 'updates.check', section: 'updates', label: 'Check for new versions', hint: 'While you are online. Nothing is installed until you choose to.', type: 'switch', keywords: 'update upgrade version release' },
+  { path: 'updates.autoDownload', section: 'updates', label: 'Get new versions ready in the background', hint: 'Downloads and checks a new version as soon as it is out, so "Restart and update" takes about a minute. It installs only when you click.', type: 'switch', keywords: 'update download automatic background' },
   { path: 'updates.news', section: 'updates', label: 'Show news posts', hint: 'Posts from the makers of Maris in Updates & news.', type: 'switch', keywords: 'blog news posts feed' },
   { path: 'updates.intervalHours', section: 'updates', label: 'Check every', type: 'number', min: 1, max: 168, step: 1, unit: 'h', keywords: 'interval hours' },
   { path: 'updates.repo', section: 'updates', label: 'Where updates and news come from', hint: 'A GitHub repository (owner/name) with releases and a news folder.', type: 'text', keywords: 'github repository source feed' },

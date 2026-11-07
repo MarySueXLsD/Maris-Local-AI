@@ -52,21 +52,29 @@ jobs:
           - name: Windows x64
             os: windows-latest
             folder: windows
+            sums: windows
             args: --win --x64
           - name: macOS (Apple chips and Intel)
             os: macos-latest
             folder: macos
+            sums: macos
             args: --mac --arm64 --x64
           - name: Linux x64
             os: ubuntu-latest
             folder: linux
+            sums: linux-x64
             args: --linux --x64
           - name: Linux ARM64
             os: ubuntu-24.04-arm
             folder: linux
+            sums: linux-arm64
             # electron-builder's deb/rpm tool (fpm) ships for x64 only; AppImage and tar.gz cover ARM.
             args: --linux AppImage tar.gz --arm64
     runs-on: ${{ matrix.os }}
+    # PowerShell (the Windows default) can split "-c.directories.output=..." at the dot.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -86,7 +94,8 @@ jobs:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
       # SHA-256 of every download, for the release page and for antivirus false-positive reports.
-      - run: node scripts/checksums.cjs release/${{ matrix.folder }}
+      # The app checks its update download against these before installing it.
+      - run: node scripts/checksums.cjs release/${{ matrix.folder }} ${{ matrix.sums }}
       - uses: actions/upload-artifact@v4
         with:
           name: Maris ${{ matrix.name }}

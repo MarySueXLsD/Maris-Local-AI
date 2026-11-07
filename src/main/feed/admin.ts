@@ -140,7 +140,15 @@ class Admin {
     const token = await this.requireToken()
     const index = await this.freshIndex(token)
     const entry = index.posts.find((p) => p.id === id)
-    if (!entry) throw new Error('That post is not published.')
+    if (!entry) {
+      // A post written as a Markdown file in the news folder: removing it deletes that file.
+      const file = feed.currentIndex().posts.find((p) => p.id === id && p.source === 'file')
+      if (!file) throw new Error('That post is not published.')
+      await commitFiles(this.repo(), NEWS_BRANCH, token, [{ path: `${NEWS_FOLDER}/${file.file}`, delete: true }], `Remove post: ${file.title}`)
+      log.info('admin', `removed the Markdown post ${file.file}`)
+      feed.forgetFilePost(id)
+      return feed.currentIndex()
+    }
     const files: { path: string; delete?: boolean; content?: Buffer }[] = [{ path: `${NEWS_FOLDER}/${entry.file}`, delete: true }]
     try {
       const imgs = await gh<{ path: string }[]>(`/repos/${this.repo()}/contents/${NEWS_FOLDER}/images/${encodeURIComponent(id)}?ref=${encodeURIComponent(NEWS_BRANCH)}`, { token })

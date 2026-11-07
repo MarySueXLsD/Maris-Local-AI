@@ -34,6 +34,7 @@ import { memory } from './memory/store'
 import { route } from './router'
 import { settings } from './settings'
 import { monitor } from './system/monitor'
+import { gpuPrograms } from './system/gpuProcs'
 import { log, uid } from './util'
 
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif|bmp)$/i
@@ -215,6 +216,8 @@ export function registerIpc(): void {
 
   // ---------------------------------------------------------------- system & settings
   h('system:status', () => monitor.snapshot())
+  h('system:gpuPrograms', () => gpuPrograms.list())
+  h('system:endProgram', (pid: number) => gpuPrograms.end(Number(pid)))
   h('settings:get', () => settings.get())
   h('settings:set', (patch: DeepPartial<Settings>) => {
     const s = settings.update(patch)

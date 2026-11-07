@@ -93,7 +93,7 @@ try {
   await nav('Models')
   await win.getByRole('tab', { name: 'Videos' }).click()
   const i2v = win.getByRole('article', { name: /image → video/ })
-  check(await i2v.locator('img[alt="The picture this clip starts from"]').first().isVisible().catch(() => false), 'the picture-to-video model shows the picture each clip starts from')
+  check(await i2v.locator('img[alt="The picture this clip starts from"]').first().waitFor({ timeout: 10000 }).then(() => true).catch(() => false), 'the picture-to-video model shows the picture each clip starts from')
   await shot('feat-03-models-videos')
   await win.getByRole('tab', { name: 'Text' }).click()
   await win.getByText('More about this model').first().click()

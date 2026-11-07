@@ -386,6 +386,11 @@ class ComfyManager {
     return Boolean(this.proc)
   }
 
+  /** The process id of the ComfyUI that Maris started, if it started one. */
+  pid(): number | undefined {
+    return this.proc?.pid
+  }
+
   // ------------------------------------------------------------------ API client
 
   async queue(workflow: unknown): Promise<string> {

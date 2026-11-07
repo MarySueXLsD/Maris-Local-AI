@@ -383,7 +383,8 @@ if (!gotLock) {
       if (id) broadcast('app:command', `open:${id}`)
     }
     cliServer.start()
-    feed.start()
+    // The installer passes --updated when it starts Maris after an update.
+    feed.start({ justUpdated: process.argv.includes('--updated') })
     connectors.startAll()
     void skills.cleanLeftovers()
     monitor.start(Math.max(1, cfg.system.monitorIntervalSec) * 1000)

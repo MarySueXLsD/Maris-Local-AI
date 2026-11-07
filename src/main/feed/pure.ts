@@ -56,3 +56,118 @@ export function imageRefs(md: string): string[] {
   for (const m of md.matchAll(/<img[^>]+src=["']([^"']+)["']/gi)) refs.add(m[1]!)
   return [...refs]
 }
+
+// ------------------------------------------------------------------ news posts as plain Markdown files
+
+/** The fields of a news post (the same shape as NewsEntry in src/shared/extensions.ts). */
+export interface PostFields {
+  id: string
+  title: string
+  kind: 'news' | 'update' | 'tip'
+  date: string
+  summary: string
+  file: string
+  cover?: string
+  version?: string
+  pinned?: boolean
+  author?: string
+  source?: 'file'
+}
+
+/** "---\nkey: value\n---" at the top of a post: its fields, and the text after them. */
+export function splitFrontMatter(md: string): { meta: Record<string, string>; body: string } {
+  const m = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(md)
+  if (!m) return { meta: {}, body: md.replace(/^\uFEFF/, '') }
+  const meta: Record<string, string> = {}
+  for (const line of m[1]!.split(/\r?\n/)) {
+    const kv = /^([A-Za-z][\w-]*)\s*:\s*(.*)$/.exec(line.trim())
+    if (kv) meta[kv[1]!.toLowerCase()] = kv[2]!.trim().replace(/^(["'])(.*)\1$/, '$2')
+  }
+  return { meta, body: md.slice(m[0].length) }
+}
+
+const DATE_PREFIX = /^(\d{4}-\d{2}-\d{2})/
+
+/** Plain words from a Markdown paragraph (no links, emphasis or code marks). */
+function plainText(md: string): string {
+  return md
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/<[^>]+>/g, '')
+    .replace(/[*_`~>#]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * A post written as a Markdown file straight in the repository's news folder (no index entry needed).
+ * Fields come from front matter when it is there; otherwise the title is the first "# heading", the date
+ * comes from a YYYY-MM-DD at the start of the file name, the summary is the first paragraph and the cover
+ * is the first picture.
+ */
+export function entryFromMarkdown(fileName: string, md: string): PostFields {
+  const { meta, body } = splitFrontMatter(md)
+  const stem = fileName.replace(/^.*[\\/]/, '').replace(/\.md$/i, '')
+  const heading = /^#\s+(.+?)\s*#*\s*$/m.exec(body)?.[1]
+  const fromName = stem.replace(DATE_PREFIX, '').replace(/^[-_\s]+/, '').replace(/[-_]+/g, ' ').trim()
+  const title = meta.title || heading || (fromName ? fromName.charAt(0).toUpperCase() + fromName.slice(1) : stem)
+  const rawDate = meta.date || DATE_PREFIX.exec(stem)?.[1] || ''
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? `${rawDate}T12:00:00.000Z` : rawDate
+  let summary = meta.summary ?? ''
+  if (!summary) {
+    // The first paragraph that is text (not a heading, picture, list marker only or code).
+    const blocks = body.replace(/```[\s\S]*?```/g, '').split(/\r?\n\s*\r?\n/)
+    for (const b of blocks) {
+      if (/^\s*#/.test(b)) continue
+      const t = plainText(b)
+      if (t) {
+        summary = t.length > 220 ? `${t.slice(0, 217).replace(/\s+\S*$/, '')}…` : t
+        break
+      }
+    }
+  }
+  const kind = meta.kind === 'update' || meta.kind === 'tip' || meta.kind === 'news' ? meta.kind : meta.version ? 'update' : 'news'
+  return {
+    id: stem.toLowerCase().replace(/[^\w.-]+/g, '-'),
+    title,
+    kind,
+    date,
+    summary,
+    file: fileName,
+    cover: meta.cover || imageRefs(body)[0],
+    ...(meta.version ? { version: meta.version.replace(/^v/i, '') } : {}),
+    ...(/^(true|yes|1)$/i.test(meta.pinned ?? '') ? { pinned: true } : {}),
+    ...(meta.author ? { author: meta.author } : {}),
+    source: 'file'
+  }
+}
+
+/** The posts listed in index.json, plus Markdown files in the folder that the index does not list. */
+export function mergeNews<T extends PostFields>(indexed: T[], files: T[]): T[] {
+  const files0 = new Set(indexed.map((p) => p.file.toLowerCase()))
+  const ids = new Set(indexed.map((p) => p.id))
+  const out = [...indexed]
+  for (const f of files) {
+    if (files0.has(f.file.toLowerCase()) || ids.has(f.id)) continue
+    ids.add(f.id)
+    out.push(f)
+  }
+  return out
+}
+
+/** A post's text as shown under its title: without front matter or a first heading that repeats the title. */
+export function bodyForDisplay(md: string, title: string): string {
+  const { body } = splitFrontMatter(md)
+  const m = /^\s*#\s+(.+?)\s*#*\s*(?:\r?\n|$)/.exec(body)
+  return m && m[1]!.trim().toLowerCase() === title.trim().toLowerCase() ? body.slice(m[0].length).replace(/^\s+/, '') : body
+}
+
+/** "sha256  file name" lines (sha256sum's format) → file name → lowercase hash. */
+export function parseChecksums(text: string): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^([a-f0-9]{64})\s+\*?(.+?)\s*$/i.exec(line.trim())
+    if (m) out.set(m[2]!.replace(/^.*\//, ''), m[1]!.toLowerCase())
+  }
+  return out
+}

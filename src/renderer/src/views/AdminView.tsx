@@ -427,10 +427,16 @@ function Publisher({ status, onSignOut }: { status: AdminStatus; onSignOut: () =
                   </Button>
                 </span>
               ) : (
-                <span className="flex gap-1">
-                  <Button size="sm" variant="ghost" disabled={busy === `edit:${p.id}`} onClick={() => void edit(p.id)}>
-                    {busy === `edit:${p.id}` ? <Spinner className="size-3.5" /> : <Pencil size={14} />} Edit
-                  </Button>
+                <span className="flex items-center gap-1">
+                  {p.source === 'file' ? (
+                    <span className="px-2 text-[0.8rem] text-text-3" title={`news/${p.file} in the repository: change it there`}>
+                      Markdown file in git
+                    </span>
+                  ) : (
+                    <Button size="sm" variant="ghost" disabled={busy === `edit:${p.id}`} onClick={() => void edit(p.id)}>
+                      {busy === `edit:${p.id}` ? <Spinner className="size-3.5" /> : <Pencil size={14} />} Edit
+                    </Button>
+                  )}
                   <Button size="sm" variant="ghost" onClick={() => setConfirm(p.id)} aria-label={`Remove ${p.title}`}>
                     <Trash2 size={14} />
                   </Button>
