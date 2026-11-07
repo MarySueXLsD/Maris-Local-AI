@@ -170,6 +170,8 @@ export function Sidebar() {
   const showAdmin = useApp((s) => Boolean(s.settings?.updates.admin) && !REMOTE)
   const updateReady = useApp((s) => Boolean(s.updateState?.available))
   const readyVersion = useApp((s) => (s.updateState?.ready ? s.updateState.available?.version : undefined))
+  // The version this copy runs (in the phone app: the linked computer's), shown beside the name.
+  const version = useApp((s) => s.updateState?.current)
   const newsBadge = useApp((s) => (s.newsState?.unread ?? 0) + (s.updateState?.available ? 1 : 0))
   const unread = useApp((s) => s.unread)
   const [query, setQuery] = useState('')
@@ -205,7 +207,15 @@ export function Sidebar() {
     <aside className="flex h-full w-[268px] shrink-0 flex-col border-r border-line bg-side" aria-label="Chats and navigation">
       <div className="drag flex h-11 items-center gap-2.5 pr-2" style={{ paddingLeft: 'calc(1rem + var(--chrome-left))' }}>
         <MarisMark size={20} />
-        <span className="font-display text-[1.05rem] font-semibold tracking-tight text-text">Maris</span>
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          <span className="font-display text-[1.05rem] font-semibold tracking-tight text-text">Maris</span>
+          {version && (
+            <span className="tabular truncate text-[0.72rem] font-medium text-text-3">
+              <span aria-hidden>v{version}</span>
+              <span className="sr-only">version {version}</span>
+            </span>
+          )}
+        </span>
         <div className="flex-1" />
         <IconButton label={`Hide sidebar (${keys('B')})`} className="no-drag" onClick={toggleSidebar}>
           <PanelLeftClose size={16} />
