@@ -177,3 +177,29 @@ export function connectorToolName(connectorId: string, tool: string): string {
   const clean = (s: string): string => s.replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '')
   return `mcp_${clean(connectorId).slice(0, 20)}_${clean(tool)}`.slice(0, 64)
 }
+
+/** Words that show a request is about a service, beyond its name. */
+const SERVICE_WORDS: Record<string, RegExp> = {
+  github: /\b(github|pull requests?|prs?|gists?)\b/i,
+  huggingface: /\b(hugging ?face|hf hub)\b/i,
+  homeassistant: /\b(home assistant|smart home|thermostat|turn (on|off) the (lights?|heating|fan))\b/i
+}
+
+/**
+ * Which connected services this chat needs: one the person names (or whose kind of thing they ask
+ * about), or one the chat used before. Tools of the others stay out of the prompt: a big service such as
+ * GitHub brings dozens of tools, which filled most of a 16K context window before anything was said.
+ * `used` holds tool names from earlier in the chat and the services passed to use_connector.
+ */
+export function connectorsInPlay(connectors: { id: string; name: string; preset?: string }[], text: string, used: string[]): Set<string> {
+  const out = new Set<string>()
+  const clean = (s: string): string => s.replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 20)
+  for (const c of connectors) {
+    const prefix = `mcp_${clean(c.id)}_`
+    const named = new RegExp(`\\b${c.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text)
+    const kind = c.preset ? SERVICE_WORDS[c.preset]?.test(text) : false
+    const before = used.some((u) => u.startsWith(prefix) || u.toLowerCase() === c.name.toLowerCase() || u === c.id)
+    if (named || kind || before) out.add(c.id)
+  }
+  return out
+}

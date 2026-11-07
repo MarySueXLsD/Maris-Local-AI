@@ -58,12 +58,12 @@ jobs:
             os: macos-latest
             folder: macos
             sums: macos
-            args: --mac --arm64 --x64
+            args: --mac dmg --arm64 --x64
           - name: Linux x64
             os: ubuntu-latest
             folder: linux
             sums: linux-x64
-            args: --linux --x64
+            args: --linux AppImage deb rpm --x64
           - name: Linux ARM64
             os: ubuntu-24.04-arm
             folder: linux
@@ -104,11 +104,9 @@ jobs:
             release/${{ matrix.folder }}/SHA256SUMS-*.txt
             release/${{ matrix.folder }}/*.exe
             release/${{ matrix.folder }}/*.dmg
-            release/${{ matrix.folder }}/*-mac.zip
             release/${{ matrix.folder }}/*.AppImage
             release/${{ matrix.folder }}/*.deb
             release/${{ matrix.folder }}/*.rpm
-            release/${{ matrix.folder }}/*.tar.gz
 
   android:
     name: Android
@@ -153,11 +151,17 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Name the Android app and pick the release notes
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # Names that say who each file is for, one SHA256SUMS.txt and install-maris-linux.sh (picks the
+      # .deb, .rpm or AppImage for the computer it runs on): 10 files instead of every build output.
+      - name: Name the files, add the Linux installer and the checksums
+        run: node scripts/release-files.cjs dist "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY"
+      - name: Pick the release notes
         id: notes
         shell: bash
         run: |
-          for apk in dist/*.apk; do mv "$apk" "dist/Maris-Link-${GITHUB_REF_NAME#v}-android.apk"; done
           ls -la dist
           notes="release-notes/$GITHUB_REF_NAME.md"
           if [ -f "$notes" ]; then echo "file=$notes" >> "$GITHUB_OUTPUT"; fi

@@ -201,8 +201,13 @@ export function diskFor(disks: DiskInfo[], p: string): DiskInfo | undefined {
 }
 
 /** "C:" on Windows; the volume name or mount point elsewhere. */
+/** "C:", "Macintosh HD", and on Linux words instead of mount points: "/" reads as a fraction, not a drive. */
 export function diskName(d: DiskInfo): string {
-  return /^[a-z]:/i.test(d.root) ? d.root.slice(0, 2).toUpperCase() : d.label || d.root
+  if (/^[a-z]:/i.test(d.root)) return d.root.slice(0, 2).toUpperCase()
+  if (d.label) return d.label
+  if (d.root === '/') return 'System'
+  if (d.root === '/home') return 'Home'
+  return d.root.split('/').filter(Boolean).pop() ?? d.root
 }
 
 export function makePlan(input: PlanInput): SetupPlan {

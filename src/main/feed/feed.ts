@@ -1,5 +1,5 @@
 import { app, Notification, shell } from 'electron'
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmodSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
@@ -9,6 +9,23 @@ import { settings } from '../settings'
 import { Emitter, log } from '../util'
 import { gh, GitHubError, isNewer, raw, rawBase } from './github'
 import { bodyForDisplay, entryFromMarkdown, imageRefs, mergeNews, parseChecksums, pickAsset, postId } from './pure'
+
+let linuxPkg: 'deb' | 'rpm' | null | undefined
+/** How Maris was installed on Linux: from a .deb or .rpm package, or neither (AppImage, tar.gz). */
+function linuxPackage(): 'deb' | 'rpm' | undefined {
+  if (process.platform !== 'linux' || process.env.APPIMAGE) return undefined
+  if (linuxPkg === undefined) {
+    const ok = (cmd: string, args: string[]): boolean => {
+      try {
+        return /install ok installed|^maris-/m.test(execFileSync(cmd, args, { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }))
+      } catch {
+        return false
+      }
+    }
+    linuxPkg = ok('dpkg-query', ['-W', '-f=${Status}', 'maris']) ? 'deb' : ok('rpm', ['-q', 'maris']) ? 'rpm' : null
+  }
+  return linuxPkg ?? undefined
+}
 
 export { postId }
 
@@ -120,7 +137,7 @@ class Feed {
               notes: rel.body ?? '',
               url: rel.html_url,
               publishedAt: rel.published_at,
-              asset: pickAsset(rel.assets, process.platform, process.arch),
+              asset: pickAsset(rel.assets, process.platform, process.arch, linuxPackage()),
               checksums: rel.assets.filter((a) => /^SHA256SUMS.*\.txt$/i.test(a.name)).map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size }))
             }
           : undefined
@@ -247,6 +264,27 @@ class Feed {
     if (process.platform === 'win32') {
       spawn(file, ['--updated', '/S', '--force-run'], { detached: true, stdio: 'ignore' }).unref()
       setTimeout(() => app.quit(), 600)
+      return
+    }
+    const pkg = linuxPackage()
+    if (pkg && /\.(deb|rpm)$/i.test(file)) {
+      // Installed from a .deb or .rpm: the package manager replaces it, asking for the password in the
+      // desktop's own dialog, then Maris starts again.
+      const cmd =
+        pkg === 'deb'
+          ? ['apt-get', 'install', '-y', file]
+          : existsSync('/usr/bin/zypper')
+            ? ['zypper', '--non-interactive', 'install', '--allow-unsigned-rpm', file]
+            : ['dnf', 'install', '-y', file]
+      const code = await new Promise<number>((resolve) => {
+        const p = spawn('pkexec', cmd, { stdio: 'ignore', env: { ...process.env, DEBIAN_FRONTEND: 'noninteractive' } })
+        p.on('exit', (c) => resolve(c ?? 1))
+        p.on('error', () => resolve(-1))
+      })
+      if (code === 126 || code === 127) throw new Error('The update was not installed: the password prompt was closed.')
+      if (code !== 0) throw new Error(code === -1 ? 'The update needs pkexec (the desktop password prompt), which is not installed.' : `The package manager could not install the update (exit code ${code}).`)
+      app.relaunch({ args: ['--updated'] })
+      app.exit(0)
       return
     }
     if (process.platform === 'linux' && process.env.APPIMAGE && existsSync(process.env.APPIMAGE)) {

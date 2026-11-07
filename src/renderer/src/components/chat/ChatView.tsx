@@ -7,7 +7,14 @@ import { CodeEmptyState } from '../code/CodeEmptyState'
 import { ProjectPanel } from '../code/ProjectPanel'
 import { cn, IconButton, Tip } from '../ui'
 
-const CHAT_WIDTH = { narrow: 'max-w-[740px]', normal: 'max-w-[860px]', wide: 'max-w-[1140px]' } as const
+// The column grows with the window (between a minimum and a maximum), so wide and ultrawide screens
+// are not left with a narrow strip in the middle. The composer (Composer.tsx) is 60px narrower.
+const CHAT_WIDTH = {
+  narrow: 'max-w-[clamp(740px,48vw,1000px)]',
+  normal: 'max-w-[clamp(860px,64vw,1800px)]',
+  wide: 'max-w-[clamp(1140px,82vw,2600px)]',
+  full: 'max-w-none'
+} as const
 import { Composer, filesToAttachments } from './Composer'
 import { EmptyState } from './EmptyState'
 import { MessageView } from './Message'

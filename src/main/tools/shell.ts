@@ -5,7 +5,8 @@ import path from 'node:path'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { settings } from '../settings'
 import { truncate } from '../util'
-import { IS_WIN, OS_LABEL, posixShell, SHELL_LABEL } from '../platform'
+import { isElevated, IS_WIN, OS_LABEL, posixShell, SHELL_LABEL } from '../platform'
+import { needsAdmin } from './keys'
 import { classifyCommand, commandPrefix } from './classify'
 import { installInfo } from './installInfo'
 import { classifyPosixCommand } from './classifyPosix'
@@ -157,7 +158,20 @@ export function runShell(script: string, opts: { cwd?: string; timeoutMs?: numbe
   return IS_WIN ? runPowerShell(script, opts) : runPosix(script, opts)
 }
 
-const READ_EXAMPLES = IS_WIN ? 'Get-*, dir, ipconfig, git status…' : 'ls, cat, grep, df, git status…'
+/**
+ * A note for the model when a command failed for lack of administrator rights: ask for full control
+ * (or use run_as_admin when it is on) instead of telling the person to run it themselves.
+ */
+export function adminHint(output: string, fullControl: boolean): string {
+  const denied =
+    /access is denied|access denied|requires elevation|run as administrator|administrator privileges|administrative privileges|cannot open \S+ service|PermissionDenied|UnauthorizedAccess|not have permission|Operation not permitted|Permission denied|must be run as root|are you root|requires root/i
+  if (!denied.test(output)) return ''
+  return fullControl
+    ? '\n\nNote from Maris: this needs administrator rights. Run it again with run_as_admin (the user approves it, then the system asks too).'
+    : '\n\nNote from Maris: this needs administrator rights, and full control is off. Call request_full_control with the reason so the user can turn it on with one click, then wait. Do not ask them to run it by hand.'
+}
+
+const READ_EXAMPLES =IS_WIN ? 'Get-*, dir, ipconfig, git status…' : 'ls, cat, grep, df, git status…'
 
 export const shellTools: ToolDef[] = [
   {
@@ -174,6 +188,15 @@ export const shellTools: ToolDef[] = [
     ),
     async prepare(args, ctx) {
       const command = str(args.command, 'command')
+      // Admin-only commands fail (or silently do nothing) without administrator rights: say so before
+      // they run, so the model asks for full control (or uses run_as_admin) instead of claiming success.
+      if (needsAdmin(command, process.platform) && !isElevated()) {
+        throw new ToolError(
+          ctx.settings.agent.fullControl
+            ? 'This command needs administrator rights, so it was not run. Run the same script with run_as_admin (the user approves it, then the system asks too).'
+            : 'This command needs administrator rights, so it was not run, and full control is off. Call request_full_control with the reason: the user gets a button in the chat to turn it on. Then wait; do not ask them to run it by hand and do not claim it was done.'
+        )
+      }
       const cwd = args.cwd ? resolvePath(String(args.cwd), ctx.cwd) : ctx.cwd
       if (!existsSync(cwd)) throw new ToolError(`Working folder not found: ${cwd}`)
       const c = IS_WIN ? classifyCommand(command) : classifyPosixCommand(command)
@@ -197,7 +220,7 @@ export const shellTools: ToolDef[] = [
       const r = await runShell(command, { cwd, timeoutMs, signal: ctx.signal })
       const out = [r.stdout, r.stderr && `[stderr]\n${r.stderr}`].filter(Boolean).join('\n')
       const status = r.timedOut ? `timed out after ${timeoutMs / 1000}s` : `exit code ${r.code ?? '?'}`
-      return `$ ${command}\n(${status}, ${(r.ms / 1000).toFixed(1)}s)\n${truncate(out || '(no output)', 24000)}`
+      return `$ ${command}\n(${status}, ${(r.ms / 1000).toFixed(1)}s)\n${truncate(out || '(no output)', 24000)}${adminHint(out, ctx.settings.agent.fullControl)}`
     }
   }
 ]

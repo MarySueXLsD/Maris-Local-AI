@@ -1,7 +1,8 @@
 import { Minimize2 } from 'lucide-react'
 import { Popover } from 'radix-ui'
 import { useCallback, useEffect, useState } from 'react'
-import type { ContextUsage } from '@shared/types'
+import { patchFor } from '@shared/defaults'
+import type { ContextSizeOption, ContextSizes, ContextUsage } from '@shared/types'
 import { api } from '../../lib/api'
 import { prettyModel } from '../../lib/format'
 import { useApp } from '../../store'
@@ -22,8 +23,69 @@ const COLORS: Record<string, string> = {
   pictures: '#cf68cc'
 }
 
+/** Window sizes as the settings name them: 32768 → 32K. */
+const kb = (n: number): string => (n % 1024 === 0 ? `${n / 1024}K` : k(n))
+
 function k(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}K` : String(n)
+}
+
+/** What a window size means and what it costs here, in words. */
+function sizeWords(o: ContextSizeOption): { amount: string; cost: string } {
+  const words = Math.round((o.tokens * 0.75) / 1000) * 1000
+  const amount = `${kb(o.tokens)} tokens: about ${words.toLocaleString('en-US')} words, or ${Math.max(1, Math.round(words / 400))} pages of chat, code and tool results.`
+  const cost =
+    o.fit === 'gpu'
+      ? 'Fits in video memory together with the model: full speed.'
+      : o.fit === 'cpu'
+        ? 'The model runs on the processor: a bigger window mainly makes reading long prompts slower.'
+        : `About ${((o.spillMB ?? 0) / 1024).toFixed(1)} GB would not fit in video memory and runs from system memory: writing about ${o.slower}× slower.`
+  return { amount, cost }
+}
+
+const FIT_DOT: Record<ContextSizeOption['fit'], string> = { gpu: 'bg-ok', spill: 'bg-pollen', cpu: 'bg-text-3' }
+
+/** Pick the window size for this chat's model role, with what each size means for speed on this computer. */
+function SizePicker({ sizes, onPick }: { sizes: ContextSizes; onPick: (tokens: number) => void }) {
+  const [shown, setShown] = useState<number>()
+  const focus = sizes.options.find((o) => o.tokens === (shown ?? sizes.current)) ?? sizes.options[0]
+  if (!focus) return null
+  const w = sizeWords(focus)
+  return (
+    <div className="mt-3 border-t border-line pt-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <h4 className="text-[0.84rem] font-medium text-text">Window size</h4>
+        <span className="text-[0.74rem] text-text-3">for {sizes.role}</span>
+      </div>
+      <div role="radiogroup" aria-label={`Context window size for ${sizes.role}`} className="mt-2 flex flex-wrap gap-1.5" onMouseLeave={() => setShown(undefined)}>
+        {sizes.options.map((o) => (
+          <button
+            key={o.tokens}
+            role="radio"
+            aria-checked={o.tokens === sizes.current}
+            onMouseEnter={() => setShown(o.tokens)}
+            onFocus={() => setShown(o.tokens)}
+            onBlur={() => setShown(undefined)}
+            onClick={() => onPick(o.tokens)}
+            className={cn(
+              'tabular inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.8rem] transition-colors',
+              o.tokens === sizes.current ? 'border-petal bg-petal-soft font-medium text-text' : 'border-line text-text-2 hover:border-line-strong hover:text-text'
+            )}
+          >
+            <span className={cn('size-1.5 rounded-full', FIT_DOT[o.fit])} aria-hidden />
+            {kb(o.tokens)}
+          </button>
+        ))}
+      </div>
+      <p className="mt-2 text-[0.78rem] leading-snug text-text" aria-live="polite">
+        {w.amount} <span className={focus.fit === 'spill' ? 'text-pollen' : 'text-text-2'}>{w.cost}</span>
+      </p>
+      <p className="mt-1.5 text-[0.74rem] leading-snug text-text-3">
+        A bigger window keeps more of the conversation, files and results in view before older messages are summarised. It needs more memory, and every step takes longer to read.
+        {sizes.max ? ` This model can use up to ${kb(sizes.max)}.` : ''}
+      </p>
+    </div>
+  )
 }
 
 /** The ring: how full this chat's context window is. */
@@ -85,11 +147,11 @@ export function ContextMeter({ conversationId }: { conversationId?: string }) {
         </button>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content side="top" align="end" sideOffset={8} className="z-50 w-[340px] rounded-2xl border border-line bg-raised p-4 shadow-float">
+        <Popover.Content side="top" align="end" sideOffset={8} className="z-50 w-[360px] rounded-2xl border border-line bg-raised p-4 shadow-float">
           <div className="flex items-baseline justify-between gap-2">
             <h3 className="text-[0.95rem] font-semibold text-text">Context</h3>
             <span className="tabular text-[0.8rem] text-text-2">
-              {pct}% used · {k(u.used)} of {k(u.window)} tokens
+              {pct}% used · {k(u.used)} of {kb(u.window)} tokens
             </span>
           </div>
           <div className="mt-2.5 flex h-2.5 w-full overflow-hidden rounded-full bg-sunken" aria-hidden>
@@ -145,9 +207,17 @@ export function ContextMeter({ conversationId }: { conversationId?: string }) {
                 {busy ? <Spinner /> : <Minimize2 size={13} />} Summarise now
               </Button>
               <span className={cn('min-w-0 flex-1 truncate text-right text-[0.74rem] text-text-3')} title={u.model}>
-                {prettyModel(u.model)}, {k(u.window)} window
+                {prettyModel(u.model)}, {kb(u.window)} window
               </span>
             </div>
+          )}
+          {u.sizes && (
+            <SizePicker
+              sizes={u.sizes}
+              onPick={(tokens) => {
+                void api.settings.set(patchFor(u.sizes!.path, tokens) as Parameters<typeof api.settings.set>[0]).then(() => load())
+              }}
+            />
           )}
           <p className="mt-2 text-[0.72rem] text-text-3">Estimates: a token is about ¾ of a word.</p>
           <Popover.Arrow className="fill-[var(--raised)]" />

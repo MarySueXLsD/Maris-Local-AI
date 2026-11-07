@@ -22,6 +22,8 @@ export interface ToolContext {
   attachImageForModel: (base64: string, caption: string) => void
   /** Record where the previous version of a changed file was backed up. */
   reportBackup: (path: string) => void
+  /** End the model's turn after this tool (it asked the person something and waits for them). */
+  endTurn?: () => void
 }
 
 export interface PreparedCall {

@@ -1,3 +1,4 @@
+import './hostPlatform'
 import {
   app,
   BrowserWindow,

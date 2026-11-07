@@ -7,6 +7,7 @@ import path from 'node:path'
 import type { ApprovalPreview } from '@shared/types'
 import { formatBytes, truncate } from '../util'
 import { backupDir, isSystemPath, resolvePath } from './paths'
+import { DEVICE_WORD, IS_WIN, OS_LABEL, TRASH_LABEL } from '../platform'
 import { bool, num, schema, str, ToolError, type ToolDef } from './types'
 
 export const SKIP_DIRS = new Set([
@@ -135,7 +136,45 @@ function batchArgs(args: Record<string, unknown>, cwd: string): { files: { path:
 
 export const riskFor = (p: string): 'change' | 'system' => (isSystemPath(p) ? 'system' : 'change')
 export const systemNote = (p: string): string | undefined =>
-  isSystemPath(p) ? 'This is a Windows system location. Changes here can affect how your PC works.' : undefined
+  isSystemPath(p) ? `This is a ${OS_LABEL} system location. Changes here can affect how your ${DEVICE_WORD} works.` : undefined
+
+/** The biggest files under a folder, biggest first (reads sizes only; stops after 45 s on huge drives). */
+async function largestFiles(root: string, pattern: string, max: number, signal: AbortSignal): Promise<string> {
+  const rx = pattern && /[*?]/.test(pattern) ? globToRegex(pattern) : undefined
+  const started = Date.now()
+  const top: { path: string; size: number; mtime: Date }[] = []
+  let scanned = 0
+  const queue: string[] = [root]
+  while (queue.length && Date.now() - started < 45000 && !signal.aborted) {
+    const dir = queue.pop()!
+    let entries
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name)
+      if (e.isDirectory()) {
+        if (!e.name.startsWith('$') && e.name !== 'System Volume Information') queue.push(full)
+        continue
+      }
+      if (!e.isFile()) continue
+      if (pattern && !(rx ? rx.test(e.name) : e.name.toLowerCase().includes(pattern.toLowerCase()))) continue
+      scanned++
+      const st = await fs.lstat(full).catch(() => undefined)
+      if (!st || (top.length >= max && st.size <= top[top.length - 1]!.size)) continue
+      top.push({ path: full, size: st.size, mtime: st.mtime })
+      top.sort((a, b) => b.size - a.size)
+      if (top.length > max) top.pop()
+    }
+  }
+  const partial = queue.length > 0
+  return [
+    `The ${top.length} biggest file(s) in ${root}${partial ? ` among the first ${scanned} files (stopped after 45 s; search a smaller folder for a complete list)` : ` (all ${scanned} files checked)`}:`,
+    ...top.map((f, i) => `${i + 1}. ${f.path}  (${formatBytes(f.size)}, ${f.mtime.toISOString().slice(0, 10)})`)
+  ].join('\n')
+}
 
 export const fsTools: ToolDef[] = [
   {
@@ -228,26 +267,32 @@ export const fsTools: ToolDef[] = [
     name: 'search_files',
     risk: 'read',
     description:
-      'Find files under a folder by name pattern (glob like *.pdf or **/report*.docx) and/or by text they contain. Returns paths with size and date.',
+      'Find files under a folder by name pattern (glob like *.pdf or **/report*.docx) and/or by text they contain, or list the biggest files (sort "largest"). Returns paths with size and date. Read-only, runs without asking.',
     parameters: schema(
       {
-        root: { type: 'string', description: 'Folder to search in (e.g. C:\\, ~, Documents)' },
+        root: { type: 'string', description: `Folder to search in (e.g. ${IS_WIN ? 'C:\\, ' : '/, '}~, Documents)` },
         pattern: { type: 'string', description: 'File name glob or plain substring, e.g. *.py or invoice' },
         contains: { type: 'string', description: 'Optional text the file must contain (case-insensitive)' },
-        max_results: { type: 'integer', description: 'Default 50' }
+        sort: { type: 'string', enum: ['found', 'largest'], description: '"largest" scans the whole folder and returns the biggest files first' },
+        max_results: { type: 'integer', description: 'Default 50 (10 with sort "largest")' }
       },
       ['root']
     ),
     async prepare(args, ctx) {
+      const root = resolvePath(str(args.root, 'root'), ctx.cwd)
       return {
         risk: 'read',
-        title: `Search ${resolvePath(str(args.root, 'root'), ctx.cwd)} for ${str(args.pattern, 'pattern', false) || '*'}${args.contains ? ` containing "${args.contains}"` : ''}`
+        title:
+          args.sort === 'largest'
+            ? `Find the biggest files in ${root}`
+            : `Search ${root} for ${str(args.pattern, 'pattern', false) || '*'}${args.contains ? ` containing "${args.contains}"` : ''}`
       }
     },
     async run(args, ctx) {
       const root = resolvePath(str(args.root, 'root'), ctx.cwd)
       const pattern = str(args.pattern, 'pattern', false)
       const contains = str(args.contains, 'contains', false).toLowerCase()
+      if (args.sort === 'largest' && !contains) return largestFiles(root, pattern, Math.max(1, Math.min(100, num(args.max_results, 10))), ctx.signal)
       const max = Math.max(1, Math.min(200, num(args.max_results, 50)))
       const hasWild = /[*?]/.test(pattern)
       const rx = pattern && hasWild ? globToRegex(pattern) : undefined
@@ -400,7 +445,7 @@ export const fsTools: ToolDef[] = [
       return {
         risk: system ? 'system' : 'change',
         title: `Write ${files.length} file${files.length === 1 ? '' : 's'}${folders.length ? ` and ${folders.length} folder${folders.length === 1 ? '' : 's'}` : ''}${overwrite ? ` (${overwrite} replaced)` : ''}`,
-        detail: system ? 'Some of these are in a Windows system location. Changes there can affect how your PC works.' : undefined,
+        detail: system ? `Some of these are in a ${OS_LABEL} system location. Changes there can affect how your ${DEVICE_WORD} works.` : undefined,
         preview: { kind: 'list', items: items.slice(0, 200) },
         targets
       }
@@ -492,7 +537,7 @@ export const fsTools: ToolDef[] = [
       return {
         risk: sys ? 'system' : 'change',
         title: `Move ${path.basename(from)} → ${to}`,
-        detail: sys ? 'Involves a Windows system location.' : undefined,
+        detail: sys ? `Involves a ${OS_LABEL} system location.` : undefined,
         preview: { kind: 'list', items: [`From: ${from}`, `To:   ${to}`] },
         targets: [from, to]
       }
@@ -507,7 +552,7 @@ export const fsTools: ToolDef[] = [
         if ((e as NodeJS.ErrnoException).code !== 'EXDEV') throw e
         await fs.cp(from, to, { recursive: true, errorOnExist: true })
         await shell.trashItem(from)
-        return `Copied ${from} to ${to} (different drive) and moved the original to the Recycle Bin`
+        return `Copied ${from} to ${to} (different drive) and moved the original to the ${TRASH_LABEL}`
       }
       return `Moved ${from} → ${to}`
     }
@@ -547,7 +592,7 @@ export const fsTools: ToolDef[] = [
   {
     name: 'delete_path',
     risk: 'change',
-    description: 'Move a file or folder to the Windows Recycle Bin (recoverable). The user must approve.',
+    description: `Move a file or folder to the ${IS_WIN ? 'Windows Recycle Bin' : 'Trash'} (recoverable). The user must approve.`,
     parameters: schema({ path: { type: 'string', description: 'File or folder to delete' } }, ['path']),
     async prepare(args, ctx) {
       const p = resolvePath(str(args.path, 'path'), ctx.cwd)
@@ -556,8 +601,8 @@ export const fsTools: ToolDef[] = [
       if (/^[a-z]:\\?$/i.test(p)) throw new ToolError('Refusing to delete a whole drive.')
       return {
         risk: riskFor(p),
-        title: `Move to Recycle Bin: ${p}`,
-        detail: systemNote(p) ?? 'You can restore it from the Recycle Bin.',
+        title: `Move to ${TRASH_LABEL}: ${p}`,
+        detail: systemNote(p) ?? `You can restore it from the ${TRASH_LABEL}.`,
         targets: [p],
         preview: { kind: 'list', items: [`${st.isDirectory() ? 'Folder' : 'File'}: ${p}${st.isFile() ? ` (${formatBytes(st.size)})` : ''}`] }
       }
@@ -565,7 +610,7 @@ export const fsTools: ToolDef[] = [
     async run(args, ctx) {
       const p = resolvePath(str(args.path, 'path'), ctx.cwd)
       await shell.trashItem(p)
-      return `Moved ${p} to the Recycle Bin`
+      return `Moved ${p} to the ${TRASH_LABEL}`
     }
   }
 ]

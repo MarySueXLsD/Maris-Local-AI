@@ -18,11 +18,32 @@ export function posixShell(): string {
   return IS_MAC ? '/bin/zsh' : '/bin/bash'
 }
 
+/**
+ * "Windows 11 Pro 24H2 (build 26200)" from os.release() ("10.0.26200") and the registry's EditionID and
+ * DisplayVersion. Windows 11 still reports version 10.0, so small models read "Windows 10.0.26200" as
+ * Windows 10; the build number (22000 and up) is what tells them apart.
+ */
+export function windowsName(release: string, edition?: string, displayVersion?: string): string {
+  const build = Number(release.split('.')[2]) || 0
+  const name = build >= 22000 ? 'Windows 11' : release.startsWith('6.') ? 'Windows' : 'Windows 10'
+  const ed = edition ? ({ Core: 'Home', CoreSingleLanguage: 'Home', Professional: 'Pro', ProfessionalWorkstation: 'Pro for Workstations', Enterprise: 'Enterprise', Education: 'Education', ServerStandard: 'Server' } as Record<string, string>)[edition] ?? edition : ''
+  return [name, ed, displayVersion].filter(Boolean).join(' ') + (build ? ` (build ${build})` : '')
+}
+
+function regValue(name: string): string | undefined {
+  try {
+    const out = execFileSync('reg', ['query', 'HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion', '/v', name], { encoding: 'utf8', timeout: 3000, windowsHide: true })
+    return new RegExp(`${name}\\s+REG_\\w+\\s+(.+)`).exec(out)?.[1]?.trim()
+  } catch {
+    return undefined
+  }
+}
+
 let osName: string | undefined
-/** Human description, e.g. "Windows 11 (10.0.26200)", "macOS 15.1 (arm64)", "Ubuntu 24.04.1 LTS". */
+/** Human description, e.g. "Windows 11 Pro 24H2 (build 26200)", "macOS 15.1 (arm64)", "Ubuntu 24.04.1 LTS". */
 export function osDescription(): string {
   if (osName) return osName
-  if (IS_WIN) osName = `Windows ${os.release()}`
+  if (IS_WIN) osName = windowsName(os.release(), regValue('EditionID'), regValue('DisplayVersion'))
   else if (IS_MAC) {
     let v = os.release()
     try {
@@ -49,8 +70,26 @@ export const PATH_STYLE = IS_WIN
     ? 'Paths on this Mac use POSIX format, e.g. /Users/name/Documents.'
     : 'Paths on this PC use POSIX format, e.g. /home/name/Documents.'
 
+let elevated: boolean | undefined
+/** True when Maris itself runs with administrator rights (then admin-only commands work directly). */
+export function isElevated(): boolean {
+  if (elevated === undefined) {
+    if (IS_WIN) {
+      try {
+        execFileSync('net', ['session'], { stdio: 'ignore', timeout: 5000, windowsHide: true })
+        elevated = true
+      } catch {
+        elevated = false
+      }
+    } else elevated = process.getuid?.() === 0
+  }
+  return elevated
+}
+
 /** The word for this computer in the UI and prompts. */
 export const DEVICE_WORD = IS_MAC ? 'Mac' : 'PC'
+/** Where deleted files go. */
+export const TRASH_LABEL = IS_WIN ? 'Recycle Bin' : 'Trash'
 
 /** Linux package manager, for install hints. */
 export function linuxPackageManager(): 'apt' | 'dnf' | 'pacman' | 'zypper' | undefined {

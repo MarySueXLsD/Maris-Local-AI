@@ -345,3 +345,34 @@
     ${EndIf}
   !macroend
 !endif
+
+!ifndef BUILD_UNINSTALLER
+  ; Finish with "Run Maris" ticked: the tick only records the choice, and Maris starts in .onGUIEnd, right
+  ; after the installer window has closed. Starting it from the Finish button left the installer frozen on
+  ; screen while Windows started Maris as the signed-in user (from an elevated installer that takes seconds).
+  ; Replaces electron-builder's default finish page (assistedInstaller.nsh), which does the same otherwise.
+  !macro customFinishPage
+    !ifndef HIDE_RUN_AFTER_FINISH
+      Var MarisRunAfterFinish
+
+      Function MarisRunAfterFinishChosen
+        StrCpy $MarisRunAfterFinish 1
+      FunctionEnd
+
+      Function .onGUIEnd
+        ${If} $MarisRunAfterFinish == 1
+          ${If} ${isUpdated}
+            StrCpy $1 "--updated"
+          ${Else}
+            StrCpy $1 ""
+          ${EndIf}
+          ${StdUtils.ExecShellAsUser} $0 "$launchLink" "open" "$1"
+        ${EndIf}
+      FunctionEnd
+
+      !define MUI_FINISHPAGE_RUN
+      !define MUI_FINISHPAGE_RUN_FUNCTION "MarisRunAfterFinishChosen"
+    !endif
+    !insertmacro MUI_PAGE_FINISH
+  !macroend
+!endif

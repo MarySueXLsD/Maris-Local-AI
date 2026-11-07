@@ -120,6 +120,14 @@ Every approval box has **Always approve**. Tick it before you press **Approve**,
 
 In Code mode there is also **Auto-approve edits**, a switch at the top of the chat: file edits *inside that project* happen without asking.
 
+## Maris's own settings
+
+You can ask Maris to change its settings ("switch to dark mode", "make the text bigger"). It looks the setting up and asks every time, even when you approve everything else automatically. What Maris may do without asking, full control, the phone link and where updates come from are only changed by you.
+
+## Full control of this ${DEVICE}
+
+Settings → ${DEVICE} access → **Full control of this ${DEVICE}** (off until you turn it on) lets Maris run things as administrator (${IS_WIN ? 'Windows asks with its permission prompt as well' : 'the system asks for your password as well'}) and use the mouse and keyboard in other programs: switching windows, clicking, typing, pressing keys. Each of these waits for your approval like any other change. When a task needs it and it is off, Maris shows a **Turn on full control** button in the chat.
+
 ## Seeing and changing what is approved
 
 While anything is approved without asking, a bar above the message box says so (**Approving without asking: …**), and the status bar at the bottom shows it on every page. Click **Change** there (or the status bar item) to switch single rules off, or press **Ask before every change again**. The same switches are in Settings → ${DEVICE} access → **Approve without asking**.`
@@ -240,6 +248,16 @@ Click the ring to see:
 - **Skills**, **Memory** (what Maris remembers about you that fits this chat), and the **Project** in Code mode.
 - **Messages**, **Tool results** (file contents, command output, web pages) and **Pictures**.
 - **Free space**, and a part **kept for the answer**.
+
+## A bigger or smaller window
+
+Under **Window size** in the popover, pick how much the model keeps in view: 8K, 16K, 32K (the default), 64K or more, up to what the model supports. Point at a size to see what it means here:
+
+- **Bigger** keeps more of the chat, files and tool results in view, so older messages are summarised later. It needs more memory, and every step takes a little longer to read.
+- When the model and the window fit in video memory (green dot), answers come at full speed. When they do not (yellow dot), the part that does not fit runs from system memory, and writing gets slower; the popover estimates how much (for example *about 2.4× slower*).
+- **Smaller** is faster and leaves video memory for games or other programs, but long tasks get summarised sooner.
+
+The choice applies to the model role in use: Code mode, or the Fast, Balanced or Max model in chats. The same sizes are in Settings → Auto model choice → Context windows.
 
 ## When it gets full
 

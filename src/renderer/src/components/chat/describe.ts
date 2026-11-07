@@ -207,7 +207,29 @@ export function describeCall(call: ToolCallRecord): Described {
     case 'grep':
       return d('explore', `Searching the code for ${quote(str(a.pattern))}`, `Searched the code for ${quote(str(a.pattern))}`, { subject: quote(str(a.pattern), 24) })
     case 'search_files':
-      return d('explore', 'Looking for files', `Looked for ${str(a.pattern) || 'files'}${a.contains ? ` containing ${quote(str(a.contains), 24)}` : ''}`)
+      return a.sort === 'largest'
+        ? d('explore', 'Looking for the biggest files', 'Looked for the biggest files')
+        : d('explore', 'Looking for files', `Looked for ${str(a.pattern) || 'files'}${a.contains ? ` containing ${quote(str(a.contains), 24)}` : ''}`)
+    case 'run_as_admin':
+      return d('system', 'Running something as administrator', 'Ran something as administrator', { important: true, why: 'runs with administrator rights' })
+    case 'list_windows':
+      return d('look', 'Looking at the open windows', 'Looked at the open windows')
+    case 'desktop_action':
+      return a.action === 'type_text'
+        ? d('run', 'Typing in another program', 'Typed in another program', { important: true, why: 'types into another program' })
+        : a.action === 'press_keys'
+          ? d('run', `Pressing ${str(a.keys)}`, `Pressed ${str(a.keys)}`, { important: true, why: 'presses keys in another program' })
+          : a.action === 'focus_window'
+            ? d('run', `Switching to ${quote(str(a.window), 30)}`, `Switched to ${quote(str(a.window), 30)}`)
+            : d('run', 'Using the mouse', 'Used the mouse', { important: true, why: 'clicks in another program' })
+    case 'request_full_control':
+      return d('other', 'Asking for full control of this computer', 'Asked for full control of this computer')
+    case 'use_connector':
+      return d('explore', `Getting ${str(a.service) || 'a connected service'} ready`, `Got ${str(a.service) || 'a connected service'} ready`)
+    case 'maris_settings':
+      return d('explore', "Looking at Maris's settings", "Looked at Maris's settings")
+    case 'change_maris_settings':
+      return d('system', 'Changing its own settings', 'Changed its own settings', { important: true, why: 'changes how Maris itself works' })
     case 'edit_file':
     case 'multi_edit': {
       const c = diffCounts(call.diff)

@@ -272,17 +272,27 @@ class Connectors {
     this.emit()
   }
 
-  /** The tools of every ready connector, in the form the assistant uses. */
-  tools(): ToolDef[] {
+  /** The tools of every ready connector (or only of `only`), in the form the assistant uses. */
+  tools(only?: Set<string>): ToolDef[] {
     if (!settings.get().extensions.connectors) return []
     this.load()
     const out: ToolDef[] = []
     for (const c of this.configs) {
       const l = this.live.get(c.id)
-      if (!c.enabled || l?.status !== 'ready' || !l.client) continue
+      if (!c.enabled || l?.status !== 'ready' || !l.client || (only && !only.has(c.id))) continue
       for (const t of l.tools) out.push(this.toolDef(c, t, l.client))
     }
     return out
+  }
+
+  /** Connectors that are on and connected, with how many tools each brings. */
+  ready(): { id: string; name: string; preset?: string; tools: number }[] {
+    if (!settings.get().extensions.connectors) return []
+    this.load()
+    return this.configs.flatMap((c) => {
+      const l = this.live.get(c.id)
+      return c.enabled && l?.status === 'ready' && l.client ? [{ id: c.id, name: c.name, preset: c.preset, tools: l.tools.length }] : []
+    })
   }
 
   find(name: string): ToolDef | undefined {

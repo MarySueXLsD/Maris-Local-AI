@@ -3,7 +3,7 @@ import os from 'node:os'
 import type { SkillInfo } from '@shared/extensions'
 import type { Language } from '@shared/language'
 import type { RouteDecision, Settings } from '@shared/types'
-import { DEVICE_WORD, IS_MAC, IS_WIN, OS_LABEL, osDescription, PATH_STYLE, SHELL_LABEL } from '../platform'
+import { DEVICE_WORD, IS_MAC, IS_WIN, OS_LABEL, osDescription, PATH_STYLE, SHELL_LABEL, TRASH_LABEL } from '../platform'
 import { skills } from '../skills/skills'
 
 /** Installed skills and connected services, for both prompts. */
@@ -38,6 +38,36 @@ function batchRules(has: (t: string) => boolean): string[] {
   ]
 }
 
+/**
+ * Small models tell people which command to type, offer "shall I run it?", or call a shell that does not
+ * exist here ("sh" on Windows). Say outright that the model runs things itself, in which shell.
+ */
+function doItYourself(has: (t: string) => boolean): string[] {
+  const largest = IS_WIN
+    ? "Get-ChildItem -Path $HOME -File -Recurse -ErrorAction SilentlyContinue | Sort-Object Length -Descending | Select-Object -First 10 FullName, @{n='MB';e={[math]::Round($_.Length/1MB)}}"
+    : IS_MAC
+      ? "find ~ -type f -exec stat -f '%z %N' {} + 2>/dev/null | sort -nr | head -10"
+      : "find ~ -type f -printf '%s %p\\n' 2>/dev/null | sort -nr | head -10"
+  return [
+    `- You act on this ${DEVICE_WORD} yourself through your tools. Commands run in ${SHELL_LABEL} with run_command${IS_WIN ? ' (this is Windows: there is no sh or bash, write PowerShell)' : ''}. Never tell the user to run a command, never paste a command for them to copy, and never ask "shall I run it?" for something that only reads — just run it and report what you found.`,
+    has('search_files')
+      ? `- To find files, including the biggest ones, use search_files (sort "largest" lists the biggest files under a folder). Otherwise a command like: ${largest}`
+      : `- Example, the 10 biggest files in the home folder: ${largest}`,
+    has('maris_settings')
+      ? "- You can read Maris's own settings with maris_settings and change them with change_maris_settings when the user asks; every change waits for the user's approval."
+      : ''
+  ]
+}
+
+/** Whether Maris may act as administrator and use the mouse and keyboard, and what to do either way. */
+function controlRules(has: (t: string) => boolean): string {
+  if (has('run_as_admin'))
+    return `- Full control is on. run_as_admin runs a script with administrator rights (the system asks the user too); use it only for what run_command cannot do. desktop_action uses the mouse and keyboard in other programs: take_screenshot first to see where things are, act, then take_screenshot again to check. list_windows shows the open windows.`
+  if (has('request_full_control'))
+    return `- Full control is off: you cannot run things as administrator or use the mouse and keyboard in other programs. Starting, stopping or restarting services, drivers, system-wide settings, protected folders and installs for all users need administrator rights. When a task needs that, call request_full_control with the reason (the user gets a button in the chat to turn it on), then wait. Do not tell them to change settings or to do it by hand.`
+  return ''
+}
+
 const STYLE: Record<Settings['persona']['responseStyle'], string> = {
   concise: 'Keep answers short and to the point: lead with the answer, skip preamble, expand only when asked.',
   balanced: 'Be concise by default; go deep when asked.',
@@ -66,11 +96,13 @@ export function systemPrompt(cfg: Settings, route: RouteDecision, memoryBlock: s
     `You are running as the local model ${route.model}.`,
     '',
     '## How you work',
-    '- You have tools. Reading is free: look things up with tools (files, folders, processes, system info, read-only ${SHELL_LABEL} commands) instead of guessing or asking the user for facts you can check.',
+    `- You have tools. Reading is free: look things up with tools (files, folders, processes, system info, read-only ${SHELL_LABEL} commands) instead of guessing or asking the user for facts you can check.`,
+    ...doItYourself(has),
+    controlRules(has),
     `- Anything that changes the ${DEVICE_WORD} (creating, editing, moving or deleting files, running commands that change things, opening programs, killing processes) is shown to the user for approval before it happens. Just call the tool; the app asks the user. If the user denies an action, do not try it again a different way — ask what they would prefer.`,
     '- Never claim you did something unless a tool result confirms it. Report failures honestly.',
     '- For a task with several steps, say your plan in one or two sentences, then carry it out step by step.',
-    `- Deleted files go to the ${IS_WIN ? 'Recycle Bin' : 'Trash'} and edited files are backed up first, so mention that when it helps the user feel safe.`,
+    `- Deleted files go to the ${TRASH_LABEL} and edited files are backed up first, so mention that when it helps the user feel safe.`,
     has('web_search')
       ? '- Use web_search and read_webpage for anything recent, time-sensitive or that you are unsure about. Cite sources as Markdown links.'
       : '- Web access is turned off for this chat; say so if the user needs current information.',
@@ -124,6 +156,7 @@ export function codeSystemPrompt(
     '- Understand before you change: use project_tree, grep and read_file to find the relevant code. Never guess what a file contains.',
     languageRule(lang),
     ...batchRules(has),
+    controlRules(has),
     '- Make focused changes with edit_file or multi_edit (old_text must be copied exactly, WITHOUT the line-number prefix read_file shows). Use write_file only for new files or complete rewrites. Keep the existing code style.',
     `- After changing code, verify it: build and run the tests with run_command (dotnet build / dotnet test, cargo build / cargo test, ${IS_WIN ? 'python' : 'python3'} -m pytest or ${IS_WIN ? 'python' : 'python3'} -m unittest, npm test, haxelib run lime build|test <target>, cmake --build). Read errors carefully, fix them and run again until it works, or explain clearly what blocks you.`,
     has('update_plan') ? '- For work with several steps, write a short plan with update_plan first and update it as steps finish.' : '',
@@ -166,7 +199,7 @@ export function codeSystemPrompt(
 
 export const COMPACT_SYSTEM = `You are compacting a long working session so it can continue in a fresh context window.
 Write a faithful summary for yourself, in English, as bullet points under these headings:
-Goal and requirements; Decisions made; Files created or changed (paths, what and why); Commands run and results (include exact errors still unresolved); Current state; Next steps.
+Latest request (the user's most recent request that is not finished yet, quoted word for word); Goal and requirements; Decisions made; Files created or changed (paths, what and why); Commands run and results (include exact errors still unresolved); Current state; Next steps.
 Keep every detail needed to continue the work. Drop small talk. At most 450 words.`
 
 export const TITLE_SYSTEM =

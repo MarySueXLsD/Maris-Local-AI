@@ -325,8 +325,8 @@ export function SetupView() {
                     title="Storage"
                     delay={0}
                     shown={revealed >= 4}
-                    value={scan && (scan.disks.length ? scan.disks.map((d) => `${diskName(d)} ${gbDec(d.freeGB)}`).join(' · ') : 'No fixed drives found')}
-                    detail="Free space per drive"
+                    value={scan && (scan.disks.length ? scan.disks.map((d) => `${diskName(d)}: ${gbDec(d.freeGB)} free`).join(' · ') : 'No fixed drives found')}
+                    detail={scan && (scan.disks.length ? scan.disks.map((d) => `${diskName(d)} ${gbDec(d.totalGB)}`).join(' · ') + ' in total' : 'Free space per drive')}
                   />
                   <Stat
                     icon={<Sparkles size={16} />}

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { splitPaths } from '../src/renderer/src/lib/paths.ts'
+import { isWholePath, splitPaths } from '../src/renderer/src/lib/paths.ts'
 
 const paths = (t: string): string[] => splitPaths(t).flatMap((p) => (p.path ? [p.path] : []))
 
@@ -29,4 +29,16 @@ test('the pieces put back together are the original text', () => {
       .join(''),
     t
   )
+})
+
+test('a whole code span or a quoted path may contain spaces', () => {
+  assert.ok(isWholePath('H:\\Unreal Projects'))
+  assert.ok(isWholePath('C:\\Program Files\\My App\\a b.txt'))
+  assert.ok(isWholePath('/home/sam/My Documents'))
+  assert.ok(isWholePath('~/Game Builds'))
+  assert.ok(!isWholePath('npm run dev'))
+  assert.ok(!isWholePath('/help me'))
+  assert.ok(!isWholePath('C:'))
+  assert.deepEqual(paths('Open "H:\\Unreal Projects\\My Game" now.'), ['H:\\Unreal Projects\\My Game'])
+  assert.deepEqual(paths('It is in “~/Game Builds/v2”.'), ['~/Game Builds/v2'])
 })

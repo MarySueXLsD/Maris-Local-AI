@@ -22,16 +22,25 @@ export function isNewer(candidate: string, current: string): boolean {
   return false
 }
 
-/** The installer in a release that fits this computer. */
+/**
+ * The installer in a release that fits this computer. On Linux, `linuxPackage` says how this copy was
+ * installed: a .deb or .rpm installation updates with the same kind of package, otherwise the AppImage.
+ */
 export function pickAsset(
   assets: ReleaseAsset[],
   platform: string,
-  arch: string
+  arch: string,
+  linuxPackage?: 'deb' | 'rpm'
 ): { name: string; url: string; size: number } | undefined {
   const a = assets.map((x) => ({ name: x.name, url: x.browser_download_url, size: x.size }))
   const archWord = arch === 'arm64' ? /arm64|aarch64/i : /x64|x86_64|amd64/i
   if (platform === 'win32') return a.find((x) => /setup.*\.exe$/i.test(x.name)) ?? a.find((x) => /\.exe$/i.test(x.name))
   if (platform === 'darwin') return a.find((x) => /\.dmg$/i.test(x.name) && archWord.test(x.name)) ?? a.find((x) => /\.dmg$/i.test(x.name))
+  if (linuxPackage) {
+    const ext = linuxPackage === 'deb' ? /\.deb$/i : /\.rpm$/i
+    const pkg = a.find((x) => ext.test(x.name) && archWord.test(x.name))
+    if (pkg) return pkg
+  }
   return a.find((x) => /\.AppImage$/i.test(x.name) && archWord.test(x.name)) ?? a.find((x) => /\.AppImage$/i.test(x.name))
 }
 

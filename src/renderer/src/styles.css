@@ -255,6 +255,64 @@ body {
   }
 }
 
+/* Dropdown lists follow the theme. A native list painted the select's see-through background over a
+   light popup (washed-out text, the system's blue highlight); a styleable select draws its own. */
+select option {
+  background-color: var(--raised);
+  color: var(--text);
+}
+@supports (appearance: base-select) {
+  select,
+  ::picker(select) {
+    appearance: base-select;
+  }
+  select {
+    align-items: center;
+    gap: 0.4rem;
+  }
+  select::picker-icon {
+    color: var(--text-3);
+    transition: rotate 0.15s;
+  }
+  select:open::picker-icon {
+    rotate: 180deg;
+  }
+  ::picker(select) {
+    margin-block: 4px;
+    padding: 4px;
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    background: var(--raised);
+    color: var(--text);
+    box-shadow: var(--shadow);
+  }
+  select option {
+    gap: 0.5rem;
+    padding: 0.35rem 0.6rem;
+    border-radius: 6px;
+    background: transparent;
+  }
+  select option:hover,
+  select option:focus-visible {
+    background: var(--petal-soft);
+    outline: none;
+  }
+  select option:checked {
+    color: var(--petal);
+  }
+  select option::checkmark {
+    color: var(--petal);
+  }
+  select option:disabled {
+    color: var(--text-3);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  select::picker-icon {
+    transition: none;
+  }
+}
+
 /* Radix menu items */
 .menu-item {
   display: flex;

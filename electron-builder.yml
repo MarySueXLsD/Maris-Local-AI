@@ -73,9 +73,9 @@ nsis:
 
 # ------------------------------------------------------------------ macOS (build on a Mac or in CI)
 mac:
+  # Only the disk image: installed copies update from it, and a zip of the same app doubled the downloads.
   target:
     - target: dmg
-    - target: zip
   icon: resources/icon.icns
   category: public.app-category.productivity
   darkModeSupport: true

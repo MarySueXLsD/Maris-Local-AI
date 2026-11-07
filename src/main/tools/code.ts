@@ -9,7 +9,8 @@ import { commandPrefix } from './classify'
 import { applyEdit, backup, decode, encodeLike, isBinary, makeDiff, readTextFile, riskFor, SKIP_DIRS, systemNote } from './fs'
 import { resolvePath } from './paths'
 import { processes } from './processes'
-import { IS_MAC, IS_WIN, SHELL_LABEL } from '../platform'
+import { isElevated, IS_MAC, IS_WIN, SHELL_LABEL } from '../platform'
+import { needsAdmin } from './keys'
 import { runPosix, runPowerShell, runShell } from './shell'
 import { bool, num, schema, str, ToolError, type ToolDef } from './types'
 
@@ -472,6 +473,13 @@ export const codeTools: ToolDef[] = [
     async prepare(args, ctx) {
       const lang = str(args.language, 'language')
       const code = str(args.code, 'code')
+      if ((lang === 'powershell' || lang === 'bash') && needsAdmin(code, process.platform) && !isElevated()) {
+        throw new ToolError(
+          ctx.settings.agent.fullControl
+            ? 'This script needs administrator rights, so it was not run. Run it with run_as_admin instead.'
+            : 'This script needs administrator rights, so it was not run, and full control is off. Call request_full_control with the reason, then wait; do not claim it was done.'
+        )
+      }
       return {
         risk: 'system',
         title: `Run a ${lang} script (${code.split('\n').length} lines)`,

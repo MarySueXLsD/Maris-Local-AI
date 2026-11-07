@@ -11,7 +11,7 @@ export const UPDATE_HOW = IS_WIN
   ? 'Maris closes, updates itself in about a minute with no setup windows to click through, and opens again. Your chats, memories, models and settings stay. If Maris is installed for all users, Windows asks for permission once.'
   : IS_MAC
     ? 'The new version opens as a disk image: drag Maris into Applications to replace this one. Your chats, memories, models and settings stay.'
-    : 'Maris restarts on the new version. Your chats, memories, models and settings stay.'
+    : 'Maris restarts on the new version (a .deb or .rpm installation asks for your password first). Your chats, memories, models and settings stay.'
 
 /** What Maris is in the middle of, in words; undefined while it is idle. */
 function busyWords(): string | undefined {

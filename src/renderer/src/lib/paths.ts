@@ -6,9 +6,27 @@
 const WIN_PATH = /(?<![A-Za-z0-9])[A-Za-z]:\\(?:[^\\\n<>"|?*:`]*\\)*[^\\\s<>"|?*:`,;)\]]*/g
 const NIX_PATH = /(?<![\w/:.])(?:~\/|\/(?:Users|home|tmp|opt|usr|etc|var|Volumes|mnt|media|srv|Applications|private)\/)[^\s<>"|?*:`,;)\]]*/g
 
+// A path in quotes may have spaces anywhere: "C:\My Files\a b.txt".
+const QUOTED_PATH = /(?<=["“'‘])(?:[A-Za-z]:\\|~\/|\/(?:Users|home|tmp|opt|usr|etc|var|Volumes|mnt|media|srv|Applications|private)\/)[^"”'’\n<>|?*]*(?=["”'’])/g
+
+// Inline code is delimited, so a whole code span that is a path may contain spaces anywhere: `H:\Unreal Projects`.
+const WHOLE_WIN = /^(?:[A-Za-z]:\\|\\\\[^\\\s]+\\)[^<>"|?*\n:]*$/
+const WHOLE_NIX = /^(?:~|~\/[^\n<>"|?*]*|\/(?:Users|home|tmp|opt|usr|etc|var|Volumes|mnt|media|srv|Applications|private)(?:\/[^\n<>"|?*]*)?)$/
+
+/** True when all of `s` (for example an inline code span) is one path, spaces included. */
+export function isWholePath(s: string): boolean {
+  const t = s.trim()
+  return t.length >= 3 && (WHOLE_WIN.test(t) || WHOLE_NIX.test(t))
+}
+
 /** Text split into plain pieces and paths (trailing full stops and quotes are not part of a path). */
 export function splitPaths(text: string): { text: string; path?: string }[] {
   const hits: { start: number; end: number }[] = []
+  QUOTED_PATH.lastIndex = 0
+  for (let m = QUOTED_PATH.exec(text); m; m = QUOTED_PATH.exec(text)) {
+    const end = m.index + m[0].replace(/[\s.]+$/, '').length
+    if (end - m.index >= 3) hits.push({ start: m.index, end })
+  }
   for (const rx of [WIN_PATH, NIX_PATH]) {
     rx.lastIndex = 0
     for (let m = rx.exec(text); m; m = rx.exec(text)) {
@@ -18,7 +36,8 @@ export function splitPaths(text: string): { text: string; path?: string }[] {
     }
   }
   if (!hits.length) return [{ text }]
-  hits.sort((a, b) => a.start - b.start)
+  // At the same place, the longer match (a quoted path with spaces) wins.
+  hits.sort((a, b) => a.start - b.start || b.end - a.end)
   const out: { text: string; path?: string }[] = []
   let at = 0
   for (const h of hits) {

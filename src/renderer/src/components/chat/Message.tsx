@@ -20,7 +20,7 @@ import {
 } from 'lucide-react'
 import { DropdownMenu, Popover } from 'radix-ui'
 import { memo, useEffect, useRef, useState } from 'react'
-import type { ApprovalRequest, ChatMessage, MediaResult, Part, RouteDecision, Tier, ToolCallRecord } from '@shared/types'
+import type { ApprovalRequest, ChatMessage, MediaResult, MessageActivity, Part, RouteDecision, Tier, ToolCallRecord } from '@shared/types'
 import { api } from '../../lib/api'
 import { REMOTE } from '../../lib/platform'
 import { useMediaSrc } from '../Media'
@@ -29,6 +29,7 @@ import { useApp } from '../../store'
 import { Markdown } from '../Markdown'
 import { Button, cn, IconButton, inputCls, Spinner, Tip } from '../ui'
 import { ActivityGroup, TurnSummaryLine, WorkLog, type WorkItem } from './Activity'
+import { FullControlPrompt } from './FullControlPrompt'
 import { ToolCard } from './ToolCard'
 
 const TIER_ICON: Record<string, typeof Zap> = { fast: Zap, balanced: Gauge, max: Mountain, tiny: Sparkles, custom: Sparkles }
@@ -388,18 +389,23 @@ function CombinedThinking({ parts }: { parts: Extract<Part, { type: 'thinking' }
  * Between steps (a tool finished, the model reads the result and decides what to do next) nothing
  * streams for a while; this keeps it visible that Maris is still working.
  */
-function NextStepIndicator({ since }: { since: number }) {
+function NextStepIndicator({ since, activity }: { since: number; activity?: MessageActivity }) {
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(t)
   }, [])
-  const s = Math.max(0, Math.floor((now - since) / 1000))
+  // What the model is doing (loading, reading, thinking) when Maris knows; otherwise how long it has been.
+  const from = activity?.since ?? since
+  const s = Math.max(0, Math.floor((now - from) / 1000))
+  const text = activity?.text ?? (s < 10 ? 'Reading the results…' : s < 60 ? 'Working on the next step…' : 'Still working on the next step…')
   return (
-    <div className="flex items-center gap-2 py-1 text-[0.88rem]" role="status">
-      <Spinner className="size-3.5" />
-      <span className="live">{s < 10 ? 'Reading the results…' : s < 60 ? 'Working on the next step…' : 'Still working on the next step…'}</span>
-      {s >= 3 && <span className="tabular text-[0.8rem] text-text-3">{s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`}</span>}
+    <div className="flex min-w-0 items-center gap-2 py-1 text-[0.88rem]" role="status">
+      <Spinner className="size-3.5 shrink-0" />
+      <span className={cn('live min-w-0 truncate', activity?.text.startsWith('Thinking') && 'text-text-2 italic')} title={text}>
+        {text}
+      </span>
+      {s >= 3 && <span className="tabular shrink-0 text-[0.8rem] text-text-3">{s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`}</span>}
     </div>
   )
 }
@@ -426,6 +432,12 @@ function AssistantMessage({ m, approvals }: { m: ChatMessage; approvals: Approva
   const text = m.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n\n')
   const empty = m.parts.length === 0
   const calls = m.parts.flatMap((p) => (p.type === 'tool' ? [p.call] : []))
+  // Maris asked for full control of the PC: the card with the button shows however steps are grouped.
+  const fullAsk = [...calls].reverse().find((c) => c.name === 'request_full_control' && c.status === 'done')
+  const isLast = useApp((s) => {
+    const list = s.messages[m.conversationId]
+    return list?.[list.length - 1]?.id === m.id
+  })
   // When the current pause began (kept across re-renders so the timer does not restart).
   const pause = useRef<{ key: string; since: number }>(undefined)
   const key = idleKey(m, live)
@@ -456,10 +468,17 @@ function AssistantMessage({ m, approvals }: { m: ChatMessage; approvals: Approva
   }
   return (
     <div className="group space-y-1">
-      {empty && live && (
-        <div className="flex items-center gap-2 py-1 text-[0.9rem]">
-          <span className="live">{m.route ? `${prettyModel(m.route.model)} is getting ready…` : 'Choosing a model…'}</span>
-        </div>
+      {empty && live &&
+        (m.activity ? (
+          <NextStepIndicator since={m.activity.since} activity={m.activity} />
+        ) : (
+          <div className="flex items-center gap-2 py-1 text-[0.9rem]">
+            <span className="live">{m.route ? `${prettyModel(m.route.model)} is getting ready…` : 'Choosing a model…'}</span>
+          </div>
+        ))}
+      {/* The detailed view already streams the thinking itself. */}
+      {!empty && live && idle === undefined && m.activity && !(m.parts[m.parts.length - 1]?.type === 'thinking' && !simple && showThinking) && (
+        <NextStepIndicator since={m.activity.since} activity={m.activity} />
       )}
       {simple && !codeChat && (
         <CombinedThinking
@@ -473,7 +492,8 @@ function AssistantMessage({ m, approvals }: { m: ChatMessage; approvals: Approva
         : simple
           ? groupParts(m.parts, live).map((g) => (g.kind === 'tools' ? <ActivityGroup key={`t${g.index}`} calls={g.calls} approvals={approvals} /> : renderPart(g.part, g.index)))
           : m.parts.map((p, i) => renderPart(p, i))}
-      {idle !== undefined && <NextStepIndicator key={`${m.parts.length}`} since={idle} />}
+      {idle !== undefined && <NextStepIndicator key={`${m.parts.length}`} since={idle} activity={m.activity} />}
+      {fullAsk && <FullControlPrompt reason={String(fullAsk.args?.reason ?? 'For this task.')} latest={isLast} />}
       {simple && !live && calls.length > 0 && <TurnSummaryLine calls={calls} />}
       {m.status === 'error' && (
         <div role="alert" className="rounded-xl border border-danger/40 bg-danger-soft px-3.5 py-2.5 text-[0.9rem] text-text">

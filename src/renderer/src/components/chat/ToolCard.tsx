@@ -213,7 +213,7 @@ export function ApprovalPanel({ request, simple, described }: { request: Approva
   const chosen = options.find((o) => o.value === rule) ?? options[0]!
   const answer = async (ok: boolean): Promise<void> => {
     setBusy(true)
-    await api.chat.approve(request.id, ok, ok && always ? chosen.value : undefined)
+    await api.chat.approve(request.id, ok, ok && always && !request.alwaysAsk ? chosen.value : undefined)
   }
   const system = request.risk === 'system'
   const friendly = simple && described && described.kind !== 'other'
@@ -265,6 +265,9 @@ export function ApprovalPanel({ request, simple, described }: { request: Approva
         {system && <span className="ml-auto text-[0.8rem] text-danger">System-level change</span>}
       </div>
       {/* "Always approve …": the dropdown widens it from this kind of request to the whole session or everything. */}
+      {request.alwaysAsk ? (
+        <p className="text-[0.8rem] text-text-3">Maris asks every time before it changes its own settings, even when other changes are approved automatically.</p>
+      ) : (
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-[0.84rem] text-text-2">
         <label className="inline-flex cursor-pointer items-center gap-2">
           <input type="checkbox" className="size-4 accent-petal" checked={always} disabled={busy} onChange={(e) => setAlways(e.target.checked)} />
@@ -288,7 +291,8 @@ export function ApprovalPanel({ request, simple, described }: { request: Approva
         </select>
         <span className="text-[0.78rem] text-text-3">{chosen.hint}</span>
       </div>
-      {always && chosen.warn && (
+      )}
+      {always && !request.alwaysAsk && chosen.warn && (
         <p className="flex items-start gap-1.5 text-[0.8rem] text-danger" role="note">
           <CircleAlert size={14} className="mt-0.5 shrink-0" aria-hidden /> {chosen.warn}
         </p>

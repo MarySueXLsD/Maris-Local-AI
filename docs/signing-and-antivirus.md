@@ -23,7 +23,7 @@ false alarms. Signing is the one that makes the biggest difference.
   watches. The launcher now does both itself (`--maris-start`, `--maris-path`).
 - **Everything is undone on uninstall**: PATH entry, folder menu, startup entry, shortcuts.
 - **Checksums.** `node scripts/checksums.cjs release/windows` writes `SHA256SUMS-windows.txt` with
-  the SHA-256 fingerprint of each file; the release workflow does it for every build.
+  the SHA-256 fingerprint of each file; a GitHub release lists every file (and the unpacked `Maris.exe`) in `SHA256SUMS.txt`.
 
 ## 2. Sign the program (the real fix)
 
@@ -75,7 +75,7 @@ should say `Valid`.
 
 Each vendor has a form for software publishers. Upload the installer (and the flagged file, for example
 `Uninstall Maris.exe` from `C:\Program Files\Maris` or from `release\windows\win-unpacked`), say it is
-your own open-source program, and include the SHA-256 from `SHA256SUMS-windows.txt`. Answers usually
+your own open-source program, and include the SHA-256 from `SHA256SUMS.txt` (or `SHA256SUMS-windows.txt` of a local build). Answers usually
 take a day or two, and a cleared file stays cleared. Every new unsigned build has a new fingerprint,
 so it may need reporting again; a signed one keeps your reputation.
 

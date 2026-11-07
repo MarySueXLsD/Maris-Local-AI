@@ -158,6 +158,9 @@ test('disks: drive letters on Windows, longest mount point elsewhere', () => {
   assert.equal(diskFor(nix, '/opt/x')?.root, '/')
   assert.equal(diskName(win[1]!), 'H:')
   assert.equal(diskName({ root: '/Volumes/T7', label: 'T7', freeGB: 1, totalGB: 1 }), 'T7')
+  assert.equal(diskName({ root: '/', freeGB: 295, totalGB: 476 }), 'System')
+  assert.equal(diskName({ root: '/home', freeGB: 1, totalGB: 1 }), 'Home')
+  assert.equal(diskName({ root: '/mnt/games', freeGB: 1, totalGB: 1 }), 'games')
 })
 
 // ------------------------------------------------------------------ POSIX command safety

@@ -9,7 +9,13 @@ import { DEVICE, keys, modKey, REMOTE } from '../../lib/platform'
 import { AutoApproveBar, useAutoApprove } from '../AutoApprove'
 import { ContextMeter } from './ContextMeter'
 
-const COMPOSER_WIDTH = { narrow: 'max-w-[680px]', normal: 'max-w-[800px]', wide: 'max-w-[1080px]' } as const
+// 60px narrower than the chat column (ChatView.tsx), growing with the window the same way.
+const COMPOSER_WIDTH = {
+  narrow: 'max-w-[calc(clamp(740px,48vw,1000px)_-_60px)]',
+  normal: 'max-w-[calc(clamp(860px,64vw,1800px)_-_60px)]',
+  wide: 'max-w-[calc(clamp(1140px,82vw,2600px)_-_60px)]',
+  full: 'max-w-none'
+} as const
 
 async function imageFileToAttachment(file: File): Promise<Attachment> {
   const dataUrl = await new Promise<string>((resolve, reject) => {

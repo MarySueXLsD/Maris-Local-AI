@@ -195,6 +195,9 @@ export const useApp = create<State>((set, get) => {
       case 'route':
         set((s) => patchMessage(s, e.conversationId, e.messageId, (m) => ({ ...m, route: e.route, model: e.route.model })))
         break
+      case 'activity':
+        set((s) => patchMessage(s, e.conversationId, e.messageId, (m) => ({ ...m, activity: e.activity })))
+        break
       case 'conversation':
         set((s) => {
           const list = s.conversations.filter((c) => c.id !== e.conversation.id)

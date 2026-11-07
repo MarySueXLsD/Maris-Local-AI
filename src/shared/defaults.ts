@@ -21,7 +21,7 @@ export const DEFAULT_SETTINGS: Settings = {
     smartClassifier: true,
     preferSpeed: 0.5,
     allowCpuFallback: true,
-    contextByTier: { tiny: 8192, fast: 16384, balanced: 16384, max: 16384 },
+    contextByTier: { tiny: 8192, fast: 32768, balanced: 32768, max: 32768 },
     codeContext: 32768,
     stepDownOnBattery: true,
     preferLoaded: true,
@@ -32,6 +32,7 @@ export const DEFAULT_SETTINGS: Settings = {
   agent: {
     maxSteps: 0,
     autoRunReadOnlyCommands: true,
+    fullControl: false,
     defaultThink: 'auto',
     autoCompact: true,
     compactAt: 0.9,

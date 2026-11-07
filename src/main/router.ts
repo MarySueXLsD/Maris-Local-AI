@@ -208,7 +208,16 @@ export interface RouteInput {
   previous?: { category: TaskCategory; complexity: number }
 }
 
-function prettyModel(name: string): string {
+/**
+ * Video memory a model needs, in MB: its weights (with the vision projector), the context window's
+ * cache (about 0.5 GB per 16K tokens for the big models, 0.3 GB for the others) and buffers. Calibrated on
+ * a 16 GB card; the context popover uses the same estimate to say what a bigger window costs.
+ */
+export function vramNeedMB(weightsMB: number, big: boolean, ctx: number): number {
+  return weightsMB + (ctx / 16384) * (big ? 520 : 320) + 350
+}
+
+export function prettyModel(name: string): string {
   return name.replace(/^hf\.co\/[^/]+\//, '').replace(/-GGUF/i, '')
 }
 
@@ -286,6 +295,13 @@ export async function route(
   const tFast = 0.3 + shift
   const tBalanced = 0.58 + shift
   let wanted: Tier = c < tFast ? 'fast' : c < tBalanced ? 'balanced' : 'max'
+  // Doing things on the PC means choosing tools and writing commands, which the smallest model gets wrong
+  // (it called a "sh" tool on Windows and then argued it could not run PowerShell).
+  const pcTask = a.category === 'agent'
+  if (pcTask && wanted === 'fast') {
+    wanted = 'balanced'
+    reasons.push('tasks on the PC need a model that uses tools reliably')
+  }
 
   // ---- system constraints
   let cpuOnly = cpuMode
@@ -296,8 +312,8 @@ export async function route(
     cpuOnly = cfg.routing.allowCpuFallback
     reasons.push('the GPU is busy generating media')
   } else if (sys.busy === 'heavy') {
-    // Code work needs a capable model more than a quick one: one step down, not to the smallest.
-    const lower: Tier = code ? (wanted === 'max' ? 'balanced' : wanted) : 'fast'
+    // Code work and PC tasks need a capable model more than a quick one: one step down, not to the smallest.
+    const lower: Tier = code || pcTask ? (wanted === 'max' ? 'balanced' : wanted) : 'fast'
     if (wanted !== lower) reasons.push('another app is using the GPU heavily')
     wanted = lower
   } else if (sys.busy === 'busy' && wanted === 'max') {
@@ -351,8 +367,7 @@ export async function route(
   let numCtx = ctxFor(tier)
   const gpuTotal = sys.gpu?.memTotalMB ?? 0
   const sizeOf = (name: string): number => (byName.get(name)?.sizeBytes ?? 0) / 2 ** 20
-  // Calibrated on a 16 GB card: weights (+ vision projector), ~0.5 GB KV per 16K tokens for big models, buffers.
-  const needOf = (name: string, t: Tier, ctx: number): number => sizeOf(name) + (ctx / 16384) * (t === 'max' ? 520 : 320) + 350
+  const needOf = (name: string, t: Tier, ctx: number): number => vramNeedMB(sizeOf(name), t === 'max', ctx)
   // GPU only: step down as soon as a model would spill. GPU + CPU: keep the bigger model and let
   // Ollama run the overflow from RAM, unless most of it would end up there.
   const hybrid = cfg.engine.processing === 'hybrid'
@@ -360,16 +375,11 @@ export async function route(
   const cpuFactor = hybrid ? 3 : 1.6
   if (gpuTotal > 0 && !cpuOnly) {
     const available = gpuTotal - sys.external.vramMB - cfg.engine.gpuReserveMB
-    if (code) {
-      // Spilling into system RAM is 2–3× slower, so take the largest context that still fits fully on the GPU.
-      const wantedCtx = numCtx
-      for (const ctx of [wantedCtx, 24576, 16384].filter((v, i, a) => v <= wantedCtx && a.indexOf(v) === i)) {
-        numCtx = ctx
-        if (needOf(model, tier, ctx) <= available) break
-      }
-      if (numCtx < wantedCtx) reasons.push(`a ${numCtx / 1024}K context keeps it on the GPU`)
-    }
-    let need = needOf(model, tier, numCtx)
+    // The context window is the person's choice (Settings, or the context popover, which says what it
+    // costs). Which model fits is judged without its extra room, so a big window does not swap Max for a
+    // smaller model; if the window does not fit, Ollama keeps part of it in system memory (slower).
+    const fitCtx = Math.min(numCtx, 16384)
+    let need = needOf(model, tier, fitCtx)
     while (need > available * stepFactor && tier !== 'fast') {
       const lower: Tier = tier === 'max' ? 'balanced' : 'fast'
       const lowerModel = slot(lower)
@@ -378,13 +388,17 @@ export async function route(
       tier = lower
       model = lowerModel
       numCtx = code ? numCtx : ctxFor(lower)
-      need = needOf(model, tier, numCtx)
+      need = needOf(model, tier, Math.min(numCtx, 16384))
     }
     if (need > available * cpuFactor && cfg.routing.allowCpuFallback) {
       cpuOnly = true
       reasons.push('it runs on the CPU')
     } else if (hybrid && need > available) {
       reasons.push(`about ${Math.round((1 - available / need) * 100)}% of it runs from RAM`)
+    }
+    const withCtx = needOf(model, tier, numCtx)
+    if (!cpuOnly && withCtx > available && need <= available) {
+      reasons.push(`the ${numCtx / 1024}K context window does not all fit in video memory, so part of it runs from RAM`)
     }
   }
 
@@ -395,7 +409,7 @@ export async function route(
     if (near) {
       for (const t of order) {
         const n = cfg.tiers[t]
-        if (n && loaded.has(n) && usable(n) && Math.abs(order.indexOf(t) - order.indexOf(tier)) === 1) {
+        if (n && loaded.has(n) && usable(n) && Math.abs(order.indexOf(t) - order.indexOf(tier)) === 1 && !(pcTask && t === 'fast')) {
           reasons.push(`the ${TIER_LABEL[t].toLowerCase()} model was already loaded, which avoids a reload`)
           tier = t
           model = n
@@ -408,7 +422,8 @@ export async function route(
 
   if (!code && input.historyTokens + 3000 > numCtx) numCtx = Math.min(32768, Math.max(numCtx, 2 ** Math.ceil(Math.log2(input.historyTokens + 3000))))
   // CPU prompt processing is slow; keep the window small (Code mode still needs room for files).
-  if (cpuOnly) numCtx = Math.min(numCtx, cpuMode && code ? 16384 : 8192)
+  // Reading a long prompt is slow on a processor: at most 16K there (Maris widens it if the tools need room).
+  if (cpuOnly) numCtx = Math.min(numCtx, 16384)
 
   const think = decideThink(model, c, cpuOnly)
   const categoryLabel: Record<TaskCategory, string> = {

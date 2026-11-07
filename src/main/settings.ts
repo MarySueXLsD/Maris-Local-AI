@@ -25,6 +25,15 @@ class SettingsService {
       repo.setKv('settings-migrations', [...done])
       if (stored) repo.setKv('settings', this.current)
     }
+    if (!done.has('context-32k')) {
+      // 16K windows were the old default and filled up before a coding task got going; 32K is the default now.
+      const t = this.current.routing.contextByTier
+      if (stored) for (const k of ['fast', 'balanced', 'max'] as const) if (t[k] === 16384) t[k] = 32768
+      if (stored && this.current.routing.codeContext < 32768) this.current.routing.codeContext = 32768
+      done.add('context-32k')
+      repo.setKv('settings-migrations', [...done])
+      if (stored) repo.setKv('settings', this.current)
+    }
     if (!this.current.dataDir) {
       this.current.dataDir = suggestDataDir()
       repo.setKv('settings', this.current)

@@ -11,7 +11,7 @@ import { useApp } from '../store'
 import { MediaImg } from './Media'
 
 // ------------------------------------------------------------------ paths in answers
-import { splitPaths } from '../lib/paths'
+import { isWholePath, splitPaths } from '../lib/paths'
 
 type MdNode = { type: string; value?: string; url?: string; title?: string | null; children?: MdNode[] }
 
@@ -68,6 +68,7 @@ function PathLink({ path, children }: { path: string; children: ReactNode }) {
 }
 
 const WHOLE_PATH = (s: string): boolean => {
+  if (isWholePath(s)) return true
   const parts = splitPaths(s.trim())
   return parts.length === 1 && Boolean(parts[0]?.path)
 }

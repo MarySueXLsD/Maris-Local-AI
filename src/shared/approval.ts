@@ -88,11 +88,15 @@ export const KIND_SHORT: Record<ApprovalKind, string> = {
  * Why a request may run without asking, or undefined when the person must decide. Project rules
  * (Code mode) are checked by the agent itself before this.
  */
+/** Requests that always ask, whatever "Always approve" rules are on: Maris changing its own settings. */
+export const ALWAYS_ASK = new Set(['change_maris_settings'])
+
 export function autoApproveReason(
   rules: AutoApproveSettings | undefined,
   req: { tool: string; risk: string; inSession: boolean },
   trash = 'Recycle Bin'
 ): string | undefined {
+  if (ALWAYS_ASK.has(req.tool)) return undefined
   if (!rules && !req.inSession) return undefined
   if (rules?.everything) return 'Approved automatically: you approve everything, everywhere.'
   if (req.inSession) return 'Approved automatically: you approve everything in this session.'

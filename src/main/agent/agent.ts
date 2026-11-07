@@ -5,6 +5,8 @@ import type {
   ChatEvent,
   ChatMessage,
   ChatMode,
+  ContextSizeOption,
+  ContextSizes,
   ContextUsage,
   Conversation,
   MediaRequest,
@@ -12,6 +14,7 @@ import type {
   Part,
   RouteDecision,
   SendOptions,
+  Settings,
   ThinkMode,
   ToolCallRecord,
   ToolRisk
@@ -22,17 +25,19 @@ import { learner } from '../memory/learner'
 import { memory } from '../memory/store'
 import { quickJson } from '../memory/utility'
 import { media } from '../media/jobs'
-import { assignTiers, route, routerLearning } from '../router'
+import { assignTiers, route, routerLearning, vramNeedMB } from '../router'
+import { prettyModel } from '../../renderer/src/lib/format'
 import { settings } from '../settings'
 import { skills } from '../skills/skills'
 import { monitor } from '../system/monitor'
-import { activeTools, EDIT_TOOLS, findTool, needsApproval, toOllamaTools } from '../tools'
+import { activeTools, allToolNames, EDIT_TOOLS, findTool, needsApproval, toOllamaTools, type ChatToolContext } from '../tools'
 import { matchesAllowed } from '../tools/classify'
-import { approvalKind, autoApproveReason, kindLabel, type ApprovalRule } from '@shared/approval'
+import { ALWAYS_ASK, approvalKind, autoApproveReason, kindLabel, type ApprovalRule } from '@shared/approval'
 import { isInside } from '../tools/paths'
 import type { ToolContext } from '../tools/types'
 import { Emitter, errMsg, estimateTokens, log, truncate, uid, sleep } from '../util'
-import { DEVICE_WORD, IS_WIN } from '../platform'
+import { DEVICE_WORD, IS_WIN, SHELL_LABEL } from '../platform'
+import { resolveToolName, shellAlias } from './toolAlias'
 import { conversationLanguage, drifted, isContinuation, scriptCounts, type Language } from '@shared/language'
 import { approvals } from './approvals'
 
@@ -115,6 +120,23 @@ export function buildHistory(history: ChatMessage[]): OllamaMessage[] {
   }
   return out
 }
+
+/** What a chat is about, for picking which connected services bring their tools. */
+function chatToolContext(messages: ChatMessage[]): ChatToolContext {
+  const users = messages.filter((m) => m.role === 'user').slice(-3).map(messageText)
+  const used: string[] = []
+  for (const m of messages) {
+    for (const p of m.parts) {
+      if (p.type !== 'tool') continue
+      if (p.call.name === 'use_connector' && typeof p.call.args?.service === 'string') used.push(p.call.args.service)
+      else if (p.call.name.startsWith('mcp_')) used.push(p.call.name)
+    }
+  }
+  return { text: users.join('\n'), used }
+}
+
+/** 20400 → "20K", 850 → "850". */
+const kTokens = (n: number): string => (n >= 1000 ? `${Math.round(n / 1000)}K` : String(n))
 
 const msgTokens = (m: OllamaMessage): number =>
   estimateTokens(m.content) + (m.images?.length ?? 0) * 900 + (m.tool_calls ? estimateTokens(JSON.stringify(m.tool_calls)) : 0)
@@ -207,6 +229,22 @@ class Agent {
   }
   private emitPart(m: ChatMessage, i: number): void {
     this.events.emit({ type: 'part', conversationId: m.conversationId, messageId: m.id, partIndex: i, part: structuredClone(m.parts[i]) })
+  }
+  /** The biggest installed model with tools that is smaller than `current`, for when it keeps crashing. */
+  private smallerModel(current: string, cfg: Settings, models: ModelInfo[]): string | undefined {
+    const size = (n: string): number => models.find((m) => m.name === n)?.sizeBytes ?? 0
+    const cur = size(current)
+    return [cfg.tiers.max, cfg.tiers.balanced, cfg.tiers.fast, cfg.tiers.code]
+      .filter((n): n is string => Boolean(n) && n !== current)
+      .filter((n) => size(n) > 0 && size(n) < cur && Boolean(models.find((m) => m.name === n)?.capabilities.includes('tools')))
+      .sort((a, b) => size(b) - size(a))[0]
+  }
+
+  /** What the model is doing right now, shown under the live answer with a timer. */
+  private setActivity(m: ChatMessage, text?: string, keepSince = false): void {
+    if (text === m.activity?.text) return
+    m.activity = text ? { text, since: keepSince && m.activity ? m.activity.since : Date.now() } : undefined
+    this.events.emit({ type: 'activity', conversationId: m.conversationId, messageId: m.id, activity: m.activity })
   }
   private emitStatus(m: ChatMessage): void {
     this.events.emit({
@@ -517,8 +555,10 @@ class Agent {
       const info = models.find((m) => m.name === decision.model)
       const canTools = info?.capabilities.includes('tools') ?? false
       const canSee = info?.capabilities.includes('vision') ?? false
-      const tools = canTools ? activeTools(cfg, { webAccess: opts.webAccess ?? cfg.web.enabled, mode: code ? 'code' : 'chat' }) : []
-      const ollamaTools = toOllamaTools(tools)
+      // Connected services bring their tools only when the chat needs them (named, used before, or asked for).
+      const toolContext = (): ChatToolContext => chatToolContext([...history, msg])
+      let tools = canTools ? activeTools(cfg, { webAccess: opts.webAccess ?? cfg.web.enabled, mode: code ? 'code' : 'chat', context: toolContext() }) : []
+      let ollamaTools = toOllamaTools(tools)
       const options: Record<string, unknown> = { num_ctx: decision.numCtx }
       // Per-role sampling and placement from Settings → Models (unset values keep the model's defaults).
       const roleKey = code ? 'code' : decision.tier === 'fast' || decision.tier === 'balanced' || decision.tier === 'max' ? decision.tier : undefined
@@ -545,10 +585,20 @@ class Agent {
       }
       let sys = await buildSystem()
       const reserved = (): number => estimateTokens(sys) + estimateTokens(JSON.stringify(ollamaTools))
+      // The instructions and tool list can take most of a 16K window, leaving room for only a few
+      // messages: the chat was then summarised after four of them and the request got lost. Chat gets
+      // a window with room for the conversation (Code mode's is sized by the router to fit the GPU).
+      if (decision.numCtx - reserved() < 8000) {
+        const grown = Math.min(32768, Math.ceil((reserved() + 10000) / 4096) * 4096)
+        if (grown > decision.numCtx) {
+          decision.numCtx = grown
+          options.num_ctx = grown
+        }
+      }
 
       // ---- context compaction: fold older turns into a summary instead of silently dropping them
       const budget = decision.numCtx - reserved() - 2500
-      if (cfg.agent.autoCompact && hist.reduce((s, m) => s + msgTokens(m), 0) > budget * cfg.agent.compactAt && history.length > 4) {
+      if (cfg.agent.autoCompact && hist.reduce((s, m) => s + msgTokens(m), 0) > budget * cfg.agent.compactAt && history.length > 6) {
         let keepTokens = 0
         let cut = history.length
         while (cut > 1) {
@@ -605,9 +655,11 @@ class Agent {
         }
         const tag = `[${conv.id.slice(0, 8)}] step ${step + 1}`
         log.info('agent', `${tag}: ${model}, ${messages.length} messages, ctx ${decision.numCtx}`)
-        // If the model's process stops part-way (it happens), drop this step's partial output and run it again once.
-        // If the answer comes out in another writing system than the person's, start it again in theirs.
-        let crashRetried = false
+        // If the model's process stops part-way (it happens, mostly when the graphics card runs out of memory),
+        // drop this step's partial output and run it again: the same way once, then with a smaller model, then
+        // on the processor. If the answer comes out in another writing system than the person's, start it
+        // again in theirs.
+        let crashes = 0
         const resetStep = (): void => {
           closeThinking()
           if (textIdx >= 0) {
@@ -621,6 +673,26 @@ class Agent {
         }
         for (;;) {
           let drift = false
+          // What is happening before the first word: loading the model, reading the prompt.
+          const loadedNow = (await ollama.ps()).some((l) => l.name === model)
+          const reading =
+            step === 0 ? `Reading ${kTokens(reserved() + hist.reduce((s, m) => s + msgTokens(m), 0))} tokens: instructions, tools and the chat…` : 'Reading the results…'
+          const sizeGB = (models.find((x) => x.name === model)?.sizeBytes ?? 0) / 2 ** 30
+          this.setActivity(msg, loadedNow ? reading : `Loading ${prettyModel(model)} into memory${sizeGB ? ` (${sizeGB.toFixed(1)} GB)` : ''}…`)
+          let firstChunk = false
+          let gotContent = false
+          let lastChunk = Date.now()
+          let thinkShown = 0
+          const watch = setInterval(() => {
+            if (!firstChunk && !loadedNow && msg.activity?.text.startsWith('Loading')) {
+              void ollama.ps().then((l) => {
+                if (!firstChunk && l.some((x) => x.name === model)) this.setActivity(msg, reading)
+              })
+            } else if (firstChunk && !gotContent && Date.now() - lastChunk > 2500 && !msg.activity?.text.startsWith('Deciding')) {
+              // Thinking ended and nothing streams: the model is writing a tool call.
+              this.setActivity(msg, 'Deciding on the next action…')
+            }
+          }, 1500)
           try {
             for await (const chunk of ollama.chat(
               {
@@ -632,6 +704,8 @@ class Agent {
               },
               ctrl.signal
             )) {
+              firstChunk = true
+              lastChunk = Date.now()
               const m = chunk.message
               if (m?.thinking) {
                 if (thinkIdx < 0) {
@@ -642,8 +716,16 @@ class Agent {
                 }
                 ;(msg.parts[thinkIdx] as { text: string }).text += m.thinking
                 this.events.emit({ type: 'delta', conversationId: conv.id, messageId: msg.id, partIndex: thinkIdx, kind: 'thinking', text: m.thinking })
+                if (Date.now() - thinkShown > 700) {
+                  thinkShown = Date.now()
+                  const all = (msg.parts[thinkIdx] as { text: string }).text.replace(/\s+/g, ' ').trim()
+                  const tail = all.length > 120 ? `…${all.slice(-120).replace(/^\S*\s/, '')}` : all
+                  this.setActivity(msg, `Thinking: ${tail}`, msg.activity?.text.startsWith('Thinking') ?? false)
+                }
               }
               if (m?.content) {
+                gotContent = true
+                if (msg.activity) this.setActivity(msg, undefined)
                 closeThinking()
                 if (textIdx < 0) {
                   msg.parts.push({ type: 'text', text: '' })
@@ -675,13 +757,30 @@ class Agent {
             }
             break
           } catch (e) {
-            if (ctrl.signal.aborted || crashRetried || !isRunnerCrash(errMsg(e))) throw e
-            crashRetried = true
-            log.warn('agent', `${tag}: the model process stopped part-way, running the step again`)
+            if (ctrl.signal.aborted || crashes >= 3 || !isRunnerCrash(errMsg(e))) throw e
+            crashes++
             resetStep()
-            msg.parts.push({ type: 'notice', text: 'The model stopped unexpectedly, so Maris started this step again.', tone: 'info' })
+            let note = 'The model stopped unexpectedly, so Maris started this step again.'
+            if (crashes >= 2) {
+              const smaller = crashes === 2 && !options.num_gpu ? this.smallerModel(model, cfg, models) : undefined
+              if (smaller) {
+                model = smaller
+                modelInfo = models.find((x) => x.name === smaller)
+                msg.model = smaller
+                note = `The model stopped again, most likely because the graphics card ran out of memory. Maris goes on with the smaller ${prettyModel(smaller)}.`
+              } else {
+                options.num_gpu = 0
+                note =
+                  'The model stopped again, most likely because the graphics card ran out of memory. Maris goes on using the processor and system memory instead (slower, but it cannot run out of video memory).'
+              }
+            }
+            log.warn('agent', `${tag}: the model process stopped part-way (${crashes}): ${note}`)
+            msg.parts.push({ type: 'notice', text: note, tone: 'info' })
             this.emitPart(msg, msg.parts.length - 1)
             await new Promise((r) => setTimeout(r, 2000))
+          } finally {
+            clearInterval(watch)
+            if (msg.activity) this.setActivity(msg, undefined)
           }
         }
         closeThinking()
@@ -697,7 +796,7 @@ class Agent {
         let stuck = false
         for (const call of calls) {
           if (ctrl.signal.aborted) break
-          const r = await this.execTool(msg, conv, call, ctrl, canSee)
+          const r = await this.execTool(msg, conv, call, ctrl, canSee, new Set(tools.map((t) => t.name)))
           const sig = `${call.function.name} ${JSON.stringify(parseArgs(call.function.arguments))}`
           same = sig === same.sig ? { sig, n: same.n + 1 } : { sig, n: 1 }
           let content = r.content
@@ -718,6 +817,10 @@ class Agent {
           if (r.endTurn) endTurn = true
         }
         repo.saveMessage(msg)
+        if (canTools && calls.some((c) => c.function.name === 'use_connector')) {
+          tools = activeTools(cfg, { webAccess: opts.webAccess ?? cfg.web.enabled, mode: code ? 'code' : 'chat', context: toolContext() })
+          ollamaTools = toOllamaTools(tools)
+        }
         if (endTurn || ctrl.signal.aborted) break
         if (stuck) {
           msg.parts.push({ type: 'notice', text: 'Maris stopped this answer because the model kept repeating the same step without getting anywhere. Say what to try differently, or pick a stronger model.', tone: 'warn' })
@@ -859,10 +962,13 @@ class Agent {
     const models = await listModels().catch(() => [] as ModelInfo[])
     const chosen = conv?.model && conv.model !== 'auto' ? conv.model : draft?.model && draft.model !== 'auto' ? draft.model : undefined
     const model = chosen ?? lastRoute?.model ?? (code ? (cfg.tiers.code ?? cfg.tiers.max) : cfg.tiers.balanced) ?? cfg.tiers.fast ?? models[0]?.name ?? ''
-    const window = lastRoute?.numCtx || (code ? cfg.routing.codeContext : cfg.routing.contextByTier.balanced)
+    // The size the next answer uses: the setting for this model's role (the popover changes it), widened
+    // like the agent does when the instructions and tools leave too little room.
+    const roleTier = (['max', 'balanced', 'fast', 'tiny'] as const).find((t) => cfg.tiers[t] === model) ?? 'balanced'
+    let window = code ? cfg.routing.codeContext : cfg.routing.contextByTier[roleTier]
     const decision: RouteDecision = lastRoute ?? { model, tier: 'custom', think: false, numCtx: window, cpuOnly: false, reason: '', auto: true, category: code ? 'code' : 'chat', complexity: 0.5 }
     const info = models.find((m) => m.name === model)
-    const tools = info && !info.capabilities.includes('tools') ? [] : activeTools(cfg, { webAccess: cfg.web.enabled, mode: code ? 'code' : 'chat' })
+    const tools = info && !info.capabilities.includes('tools') ? [] : activeTools(cfg, { webAccess: cfg.web.enabled, mode: code ? 'code' : 'chat', context: chatToolContext(history) })
     const own = tools.filter((t) => !t.name.startsWith('mcp_'))
     const services = tools.filter((t) => t.name.startsWith('mcp_'))
     const toolTokens = (list: typeof tools): number => (list.length ? estimateTokens(JSON.stringify(toOllamaTools(list))) : 0)
@@ -905,9 +1011,43 @@ class Agent {
     const used = parts.reduce((s, p) => s + p.tokens, 0)
     const reserved = 2048
     const fixed = used - messagesT - resultsT - picturesT
+    if (window - fixed < 8000) window = Math.max(window, Math.min(32768, Math.ceil((fixed + 10000) / 4096) * 4096))
     const budget = window - fixed - 2500
     const untilCompact = cfg.agent.autoCompact ? Math.max(0, Math.round(budget * cfg.agent.compactAt - (messagesT + resultsT + picturesT))) : undefined
-    return { model, window, parts, used, reserved, untilCompact, summarised: Boolean(conv?.summary), messages: history.length }
+    return { model, window, parts, used, reserved, untilCompact, summarised: Boolean(conv?.summary), messages: history.length, sizes: await this.contextSizes(cfg, model, code, info) }
+  }
+
+  /**
+   * The window sizes the context popover offers for this chat's model, with what each would cost here:
+   * whether model and window fit in video memory, or how much would run from system memory (slower).
+   */
+  private async contextSizes(cfg: Settings, model: string, code: boolean, info?: ModelInfo): Promise<ContextSizes> {
+    const tier = (['max', 'balanced', 'fast', 'tiny'] as const).find((t) => cfg.tiers[t] === model)
+    const path = code ? 'routing.codeContext' : `routing.contextByTier.${tier ?? 'balanced'}`
+    const current = code ? cfg.routing.codeContext : cfg.routing.contextByTier[tier ?? 'balanced']
+    const role = code ? 'Code mode' : `the ${{ max: 'Max', balanced: 'Balanced', fast: 'Fast', tiny: 'Helper' }[tier ?? 'balanced']} model`
+    const max = info?.contextLength
+    const sizes = [...new Set([8192, 16384, 32768, 65536, 131072, current])].filter((n) => !max || n <= max).sort((a, b) => a - b)
+    // Right after Maris starts the monitor has not read the graphics card yet: wait a moment for it.
+    let sys = monitor.snapshot()
+    for (let i = 0; i < 16 && !sys.gpu && cfg.engine.processing !== 'cpu'; i++) {
+      await sleep(250)
+      sys = monitor.snapshot()
+    }
+    const gpuTotal = sys.gpu?.memTotalMB ?? 0
+    const onCpu = cfg.engine.processing === 'cpu' || gpuTotal <= 0
+    const available = gpuTotal - sys.external.vramMB - cfg.engine.gpuReserveMB
+    const weights = (info?.sizeBytes ?? 0) / 2 ** 20
+    const big = code || tier === 'max'
+    const options: ContextSizeOption[] = sizes.map((tokens) => {
+      if (onCpu) return { tokens, fit: 'cpu' }
+      const need = vramNeedMB(weights, big, tokens)
+      if (need <= available) return { tokens, fit: 'gpu' }
+      const spillMB = Math.round(need - Math.max(0, available))
+      // Measured: 12% of a 27B model in system memory wrote 2.4× slower (38 → 16 tokens/s).
+      return { tokens, fit: 'spill', spillMB, slower: Math.min(8, Math.round((1 + 11.5 * (spillMB / need)) * 10) / 10) }
+    })
+    return { path, role, current, max, options }
   }
 
   private async execTool(
@@ -915,11 +1055,19 @@ class Agent {
     conv: Conversation,
     call: OllamaToolCall,
     ctrl: AbortController,
-    canSee: boolean
+    canSee: boolean,
+    /** The tools this chat was offered; others do not run (web tools while web access is off, say). */
+    offered?: Set<string>
   ): Promise<{ content: string; images: { b64: string; caption: string }[]; endTurn: boolean; failed?: boolean }> {
-    const name = call.function.name
-    const def = findTool(name)
-    const args = parseArgs(call.function.arguments)
+    // Small models make up tool names ("system_information", "system_tool_system_info") or call a shell
+    // by name ("sh", "powershell"): those become the real tool, among the ones this chat was offered.
+    const asked = call.function.name
+    const known = offered ? [...offered] : allToolNames()
+    const real = known.includes(asked) ? asked : resolveToolName(asked, known)
+    const shell = !real && known.includes('run_command') ? shellAlias(asked, parseArgs(call.function.arguments)) : undefined
+    const name = real ?? shell?.name ?? asked
+    const def = !offered || offered.has(name) ? findTool(name) : undefined
+    const args = shell?.args ?? parseArgs(call.function.arguments)
     const rec: ToolCallRecord = { id: uid(), name, args, risk: def?.risk ?? 'read', status: 'pending', startedAt: Date.now() }
     msg.parts.push({ type: 'tool', call: rec })
     const idx = msg.parts.length - 1
@@ -932,7 +1080,12 @@ class Agent {
       rec.title = humanTool(name, args)
       rec.error = `Unknown tool "${name}"`
       update()
-      return { content: `Error: there is no tool named "${name}". Use one of the listed tools.`, images, endTurn, failed: true }
+      return {
+        content: `Error: there is no tool named "${name}". To run a ${SHELL_LABEL} command use run_command; to find files use search_files; to read a file use read_file. Call one of the listed tools yourself instead of asking the user to run anything.`,
+        images,
+        endTurn,
+        failed: true
+      }
     }
     const cfg = settings.get()
     const code = conv.mode === 'code' && Boolean(conv.projectDir)
@@ -965,6 +1118,9 @@ class Agent {
       attachImageForModel: (b64, caption) => images.push({ b64, caption }),
       reportBackup: (p) => {
         rec.backup = p
+      },
+      endTurn: () => {
+        endTurn = true
       }
     }
     try {
@@ -1009,6 +1165,7 @@ class Agent {
               preview: prep.preview,
               allowPrefix: code ? prep.allowPrefix : undefined,
               kind: approvalKind(name, prep.risk),
+              alwaysAsk: ALWAYS_ASK.has(name) || undefined,
               install: prep.install
             },
             ctrl.signal
@@ -1027,7 +1184,7 @@ class Agent {
               endTurn
             }
           }
-          if (answer.rule) rec.autoApproved = this.applyRule(answer.rule, { conversationId: conv.id, tool: name, risk: prep.risk, projectDir: live.projectDir, allowPrefix: prep.allowPrefix })
+          if (answer.rule && !ALWAYS_ASK.has(name)) rec.autoApproved = this.applyRule(answer.rule, { conversationId: conv.id, tool: name, risk: prep.risk, projectDir: live.projectDir, allowPrefix: prep.allowPrefix })
         }
       }
       rec.status = 'running'

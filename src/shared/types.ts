@@ -211,6 +211,29 @@ export interface ContextUsage {
   summarised: boolean
   /** Messages in the chat that the model still sees in full. */
   messages: number
+  /** The window sizes this chat's model can use, and what each costs on this computer. */
+  sizes?: ContextSizes
+}
+
+export interface ContextSizes {
+  /** The setting a choice changes, for example routing.codeContext or routing.contextByTier.max. */
+  path: string
+  /** Who uses that setting: "Code mode", "the Max model". */
+  role: string
+  current: number
+  /** The model's own limit. */
+  max?: number
+  options: ContextSizeOption[]
+}
+
+export interface ContextSizeOption {
+  tokens: number
+  /** gpu: fits in video memory; spill: part runs from system memory; cpu: everything runs on the processor. */
+  fit: 'gpu' | 'spill' | 'cpu'
+  /** How much would run from system memory (MB). */
+  spillMB?: number
+  /** Rough slowdown of writing compared with fitting in video memory (2 = half as fast). */
+  slower?: number
 }
 
 export type ToolRisk = 'read' | 'change' | 'system' | 'network' | 'heavy'
@@ -304,6 +327,14 @@ export interface ChatMessage {
   createdAt: number
   /** A message from the composer's Image or Video mode: what to make. */
   media?: MediaRequest
+  /** While an answer is live: what the model is doing right now (loading, reading, thinking). Not saved. */
+  activity?: MessageActivity
+}
+
+export interface MessageActivity {
+  text: string
+  /** When this stage began (ms), for the timer next to it. */
+  since: number
 }
 
 export type ChatMode = 'chat' | 'code'
@@ -404,6 +435,8 @@ export interface ApprovalRequest {
   allowPrefix?: string
   /** The kind of change, for "Always approve …" (absent when no kind rule may cover it). */
   kind?: ApprovalKind
+  /** Never covered by "Always approve" (Maris changing its own settings): the box offers no rule. */
+  alwaysAsk?: boolean
   createdAt: number
   /** For installs: how much it downloads and needs on disk. */
   install?: InstallInfo
@@ -432,6 +465,7 @@ export type ChatEvent =
       model?: string
     }
   | { type: 'route'; conversationId: string; messageId: string; route: RouteDecision }
+  | { type: 'activity'; conversationId: string; messageId: string; activity?: MessageActivity }
   | { type: 'conversation'; conversation: Conversation }
   | { type: 'conversation-deleted'; id: string }
   | { type: 'message-deleted'; conversationId: string; messageId: string }
@@ -759,6 +793,8 @@ export interface Settings {
   agent: {
     maxSteps: number
     autoRunReadOnlyCommands: boolean
+    /** Full control of this PC: run things as administrator and use the mouse and keyboard (each action still asks). */
+    fullControl: boolean
     defaultThink: ThinkMode
     autoCompact: boolean
     /** Compact when the conversation fills this share of the context window. */
@@ -801,7 +837,7 @@ export interface Settings {
     launchAtLogin: boolean
     showThinking: boolean
     density: 'comfortable' | 'compact'
-    chatWidth: 'narrow' | 'normal' | 'wide'
+    chatWidth: 'narrow' | 'normal' | 'wide' | 'full'
     sendWithEnter: boolean
     showRouteReason: boolean
     material: 'mica' | 'acrylic' | 'solid'

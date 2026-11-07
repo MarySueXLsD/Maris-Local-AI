@@ -33,23 +33,27 @@ A setup assistant scans the computer and chooses models that run well on it, wit
 
 ## Install
 
-Get the file for your system from the [latest release](https://github.com/MarySueXLsD/Maris-Local-AI/releases/latest). Each release lists the SHA-256 of every file in `SHA256SUMS-*.txt`.
+Get the file for your system from the [latest release](https://github.com/MarySueXLsD/Maris-Local-AI/releases/latest). `SHA256SUMS.txt` there lists the SHA-256 of every file.
 
 | System | File | Notes |
 | --- | --- | --- |
-| Windows 10/11 | `Maris-Setup-<version>.exe` | Installs for you or for everyone. The Extras page offers a desktop shortcut, the `maris` terminal command, "Open in Maris" for folders and starting in the background. The installer is not code-signed yet, so SmartScreen asks once (**More info → Run anyway**); see [signing and antivirus](docs/signing-and-antivirus.md). |
-| macOS 12+ | `Maris-<version>-arm64.dmg` (Apple chips) or `-x64.dmg` (Intel) | Not notarized yet: the first time, right-click Maris → **Open** (macOS 15: System Settings → Privacy & Security → **Open Anyway**). Pictures and video need an Apple chip. |
-| Linux x64 / ARM64 | `.AppImage`, `.deb`, `.rpm` or `.tar.gz` | AppImage: `chmod +x` and run. deb/rpm: `sudo apt install ./maris_*.deb` or `sudo dnf install ./maris-*.rpm`. |
-| Android 7+ | `Maris-Link-<version>-android.apk` | Connects to Maris on your computer; see [Phone app](#phone-app). |
+| Windows 10/11 | `Maris-<version>-Windows-Setup.exe` | Installs for you or for everyone. The Extras page offers a desktop shortcut, the `maris` terminal command, "Open in Maris" for folders and starting in the background. The installer is not code-signed yet, so SmartScreen asks once (**More info → Run anyway**); see [signing and antivirus](docs/signing-and-antivirus.md). |
+| macOS 12+ | `…-macOS-Apple-silicon-arm64.dmg` (M1 and newer) or `…-macOS-Intel-x64.dmg` | Not notarized yet: the first time, right-click Maris → **Open** (macOS 15: System Settings → Privacy & Security → **Open Anyway**). Pictures and video need an Apple chip. |
+| Linux | `install-maris-linux.sh`, or a package below | The installer picks the right package and checks it: `curl -fsSL https://github.com/MarySueXLsD/Maris-Local-AI/releases/latest/download/install-maris-linux.sh \| bash` |
+| | `…-Linux-x64-Debian-Ubuntu.deb` | Debian, Ubuntu, Mint, Pop!_OS: `sudo apt install ./Maris-*.deb` |
+| | `…-Linux-x64-Fedora-openSUSE.rpm` | Fedora, openSUSE, RHEL: `sudo dnf install ./Maris-*.rpm` |
+| | `…-Linux-x64.AppImage` or `…-Linux-ARM64.AppImage` | Any distribution: `chmod +x` and run (needs FUSE 2, `libfuse2t64` on Ubuntu 24.04). |
+| Android 7+ | `Maris-Link-<version>-Android.apk` | Connects to Maris on your computer; see [Phone app](#phone-app). |
 
 On first start the **setup assistant** scans the graphics card, CPU, RAM and disks (changing nothing), lets you choose **GPU only**, **GPU + CPU** or **CPU only**, recommends a model for every role and installs [Ollama](https://ollama.com), the models and [ComfyUI](https://www.comfy.org) for pictures and video. Run it again from **Settings → Data and setup**.
 
 ## Features
 
-- **Chat**: Markdown, code, math and tables, attachments, thinking, regenerate with another model. Answers stay in your language, and paths in answers open the folder.
+- **Chat**: Markdown, code, math and tables, attachments, thinking, regenerate with another model. Answers stay in your language, and paths in answers open the folder. The context ring next to Send shows what fills the chat and lets you pick the window size, with what each size costs in speed on your computer.
 - **Code mode**: pick a project folder and Maris explores, edits several files at once, builds, runs tests and dev servers, and keeps a visible plan. A file tree, a viewer where you can mention selected lines, and a list of changes with diffs and one-click revert.
 - **Automatic model choice**: every message goes to the Fast, Balanced or Max model, stepping down when a game or another program needs the graphics card, on battery, or while pictures render.
 - **Approvals**: reading is free; creating, editing, deleting, commands that change things and opening programs wait for **Approve**. Deletes go to the Recycle Bin or Trash and edited files are backed up. **Always approve** rules are optional, always visible and switch off in one click.
+- **Full control** (off until you turn it on, also from a button Maris shows in the chat when a task needs it): run things as administrator and use the mouse and keyboard in other programs, each action approved by you.
 - **Memory** that learns facts and preferences from your chats; everything is editable.
 - **Web**: search and read pages in a hidden sandboxed browser.
 - **Pictures and videos** with Z-Image, Stable Diffusion 1.5 and Wan 2.1 / 2.2 through ComfyUI, with progress, time left and **Stop**.
@@ -57,7 +61,7 @@ On first start the **setup assistant** scans the graphics card, CPU, RAM and dis
 - **Status bar** with CPU, RAM, GPU, VRAM, temperature, power and loaded models. When other programs fill half the VRAM, it lists the biggest and can end one after asking.
 - **Help** with plain-language articles, explanations on hover, and a Simple view for people who do not program.
 - **Themes**: light and dark, seven colour themes and a custom one. Full keyboard use, screen-reader labels, text size, high contrast and reduced motion.
-- **Settings**: every option is searchable, resettable and can be exported.
+- **Settings**: every option is searchable, resettable and can be exported. Ask Maris in the chat to change one; it asks every time.
 
 ### Models it picks
 
