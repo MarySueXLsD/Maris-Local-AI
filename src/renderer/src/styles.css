@@ -1,0 +1,557 @@
+@import 'tailwindcss';
+/* Both builds (desktop and the phone app, whose Vite root is ../remote) scan the whole interface. */
+@source './';
+@source '../remote';
+@import 'katex/dist/katex.min.css';
+
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/* ------------------------------------------------------------------ tokens
+   The Maris mark is a game cartridge in the accent colour with a gold star seal and gold contacts.
+   petal  → the accent (selection, primary actions, your messages)
+   pollen → live activity only (thinking, GPU work, pending approvals) */
+:root,
+[data-theme='light'] {
+  --ink: #1b1830;
+  --text: #1b1830;
+  --text-2: #5c5873;
+  --text-3: #8a86a0;
+  --paper: #f4f3f9;
+  --side: rgb(244 243 249 / 0.84);
+  --surface: rgb(255 255 255 / 0.93);
+  --raised: #ffffff;
+  --sunken: rgb(27 24 48 / 0.045);
+  --line: rgb(27 24 48 / 0.1);
+  --line-strong: rgb(27 24 48 / 0.18);
+  --petal: #6a4fe0;
+  --petal-strong: #5b3fd6;
+  --petal-soft: rgb(106 79 224 / 0.1);
+  --on-petal: #ffffff;
+  --pollen: #a86a08;
+  --pollen-soft: rgb(242 181 68 / 0.18);
+  --danger: #c62f45;
+  --danger-soft: rgb(198 47 69 / 0.1);
+  --ok: #1e8a5a;
+  --ok-soft: rgb(30 138 90 / 0.1);
+  --code-bg: #f7f6fb;
+  --shadow: 0 1px 2px rgb(27 24 48 / 0.06), 0 8px 28px rgb(27 24 48 / 0.08);
+  color-scheme: light;
+}
+
+[data-theme='dark'] {
+  --ink: #15131f;
+  --text: #ecebf6;
+  --text-2: #a9a5c0;
+  --text-3: #77738f;
+  --paper: #15131f;
+  --side: rgb(21 19 31 / 0.9);
+  --surface: rgb(26 24 38 / 0.96);
+  --raised: #232036;
+  --sunken: rgb(0 0 0 / 0.18);
+  --line: rgb(167 163 191 / 0.14);
+  --line-strong: rgb(167 163 191 / 0.26);
+  --petal: #a493ff;
+  --petal-strong: #8b76ff;
+  --petal-soft: rgb(164 147 255 / 0.14);
+  --on-petal: #120f22;
+  --pollen: #f2b544;
+  --pollen-soft: rgb(242 181 68 / 0.14);
+  --danger: #ff8597;
+  --danger-soft: rgb(255 133 151 / 0.12);
+  --ok: #72d6a8;
+  --ok-soft: rgb(114 214 168 / 0.12);
+  --code-bg: #181626;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 32px rgb(0 0 0 / 0.32);
+  color-scheme: dark;
+}
+
+/* High-contrast option for low vision: solid surfaces, stronger lines. */
+[data-contrast='high'] {
+  --side: var(--paper);
+  --surface: var(--paper);
+  --line: var(--text-3);
+  --line-strong: var(--text-2);
+  --text-2: var(--text);
+}
+
+@theme inline {
+  --color-ink: var(--ink);
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-paper: var(--paper);
+  --color-side: var(--side);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-sunken: var(--sunken);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-petal: var(--petal);
+  --color-petal-strong: var(--petal-strong);
+  --color-petal-soft: var(--petal-soft);
+  --color-on-petal: var(--on-petal);
+  --color-pollen: var(--pollen);
+  --color-pollen-soft: var(--pollen-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-code: var(--code-bg);
+  --font-sans: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Segoe UI Variable Display', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'Cascadia Code', 'Cascadia Mono', Consolas, ui-monospace, monospace;
+  --shadow-float: var(--shadow);
+}
+
+/* ------------------------------------------------------------------ base */
+html {
+  font-size: calc(15px * var(--font-scale, 1));
+}
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  /* Transparent so the Windows 11 Mica material shows through. */
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-feature-settings: 'tnum' 0;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+}
+@media (prefers-reduced-transparency: reduce) {
+  body {
+    background: var(--paper);
+  }
+}
+[data-no-mica] body {
+  background: var(--paper);
+}
+
+::selection {
+  background: var(--petal-soft);
+}
+
+:focus-visible {
+  outline: 2px solid var(--petal);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Headings focused by code (for screen readers on a new step) need no visible ring. */
+[tabindex='-1']:focus {
+  outline: none;
+}
+
+/* Room for the window buttons: drawn over the top right on Windows and Linux, traffic lights top left on macOS. */
+:root {
+  --chrome-left: 0px;
+  --chrome-right: 138px;
+}
+:root[data-chrome='mac'] {
+  --chrome-left: 64px;
+  --chrome-right: 0px;
+}
+:root[data-chrome='none'] {
+  --chrome-left: 0px;
+  --chrome-right: 0px;
+}
+
+/* The phone app draws edge to edge; keep content clear of the status bar, notch and gesture bar.
+   Capacitor provides --safe-area-inset-*; env() is the browser's own value. */
+:root {
+  --safe-top: 0px;
+  --safe-right: 0px;
+  --safe-bottom: 0px;
+  --safe-left: 0px;
+}
+:root[data-chrome='none'] {
+  --safe-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  --safe-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
+  --safe-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+  --safe-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
+}
+/* Phone app: the connection to the computer dropped (set by src/renderer/remote/main.tsx). */
+:root[data-link='connecting']::after,
+:root[data-link='offline']::after {
+  content: 'Reconnecting to your computer…';
+  position: fixed;
+  top: calc(var(--safe-top) + 3.1rem);
+  left: 50%;
+  z-index: 60;
+  transform: translateX(-50%);
+  padding: 0.4rem 0.95rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--raised);
+  box-shadow: var(--shadow-float);
+  color: var(--text);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  pointer-events: none;
+}
+:root[data-link='offline']::after {
+  content: 'Can’t reach your computer. Trying again…';
+}
+:root[data-chrome='none'] body {
+  box-sizing: border-box;
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+  background: var(--paper);
+}
+
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+.selectable,
+.selectable * {
+  user-select: text;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Thin overlay scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+/* Everything you can click shows the hand cursor (Tailwind's reset gives buttons the arrow). */
+@layer base {
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']),
+  [role='tab']:not([aria-disabled='true']),
+  [role='radio']:not([aria-disabled='true']),
+  [role='switch']:not([aria-disabled='true']),
+  [role='checkbox']:not([aria-disabled='true']),
+  [role='option']:not([aria-disabled='true']),
+  [role='menuitem'],
+  [role='menuitemradio'],
+  [role='menuitemcheckbox'],
+  a[href],
+  summary,
+  select:not(:disabled),
+  label:has(> input[type='checkbox']),
+  label:has(> input[type='radio']),
+  input[type='checkbox']:not(:disabled),
+  input[type='radio']:not(:disabled),
+  input[type='range']:not(:disabled),
+  input[type='color']:not(:disabled) {
+    cursor: pointer;
+  }
+  button:disabled,
+  select:disabled,
+  [aria-disabled='true'] {
+    cursor: not-allowed;
+  }
+}
+
+/* Radix menu items */
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.42rem 0.55rem;
+  border-radius: 0.5rem;
+  font-size: 0.88rem;
+  color: var(--text);
+  cursor: pointer;
+  outline: none;
+}
+.menu-item[data-highlighted] {
+  background: var(--petal-soft);
+}
+.menu-item[data-disabled] {
+  opacity: 0.45;
+}
+
+/* Paths in answers open the file manager. */
+.path-link {
+  color: var(--petal);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.path-link:hover {
+  text-decoration-style: solid;
+}
+
+/* ------------------------------------------------------------------ chat prose */
+.prose-maris {
+  font-size: 1rem;
+  line-height: 1.65;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.prose-maris > * + * {
+  margin-top: 0.75em;
+}
+.prose-maris h1,
+.prose-maris h2,
+.prose-maris h3,
+.prose-maris h4 {
+  font-family: var(--font-display);
+  line-height: 1.3;
+  margin-top: 1.4em;
+}
+.prose-maris h1 {
+  font-size: 1.45rem;
+  font-weight: 600;
+}
+.prose-maris h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+.prose-maris h3 {
+  font-size: 1.08rem;
+  font-weight: 600;
+}
+.prose-maris h4 {
+  font-size: 1rem;
+  font-weight: 600;
+}
+.prose-maris a {
+  color: var(--petal);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+.prose-maris ul,
+.prose-maris ol {
+  padding-left: 1.4em;
+}
+.prose-maris ul {
+  list-style: disc;
+}
+.prose-maris ol {
+  list-style: decimal;
+}
+.prose-maris li + li {
+  margin-top: 0.25em;
+}
+.prose-maris li::marker {
+  color: var(--text-3);
+}
+.prose-maris blockquote {
+  border-left: 3px solid var(--petal-soft);
+  padding-left: 0.9em;
+  color: var(--text-2);
+}
+.prose-maris :not(pre) > code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--sunken);
+  padding: 0.12em 0.38em;
+  border-radius: 5px;
+}
+.prose-maris table {
+  border-collapse: collapse;
+  font-size: 0.93em;
+  display: block;
+  overflow-x: auto;
+}
+.prose-maris th,
+.prose-maris td {
+  border-bottom: 1px solid var(--line);
+  padding: 0.45em 0.8em;
+  text-align: left;
+}
+.prose-maris th {
+  font-weight: 600;
+  color: var(--text-2);
+}
+.prose-maris hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+.prose-maris img {
+  max-width: 100%;
+  border-radius: 10px;
+}
+
+/* Neon themes: primary actions, focus rings, progress and the logo glow in the accent colour. */
+[data-glow] .bg-petal-strong,
+[data-glow] .bg-petal {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--petal) 55%, transparent),
+    0 0 16px -2px color-mix(in srgb, var(--petal) 70%, transparent);
+}
+[data-glow] :focus-visible {
+  box-shadow: 0 0 14px color-mix(in srgb, var(--petal) 65%, transparent);
+}
+/* The message box shows focus with its own border; no inner ring. */
+textarea[aria-label='Message Maris']:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+[data-glow] svg .petal {
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--petal) 80%, transparent));
+}
+[data-glow] .font-display.font-light {
+  text-shadow: 0 0 22px color-mix(in srgb, var(--petal) 40%, transparent);
+}
+[data-glow] .bg-petal-soft {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--petal) 30%, transparent);
+}
+[data-glow] .live {
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--pollen) 55%, transparent));
+}
+
+/* Settings → Appearance → Density: compact */
+[data-density='compact'] .prose-maris {
+  line-height: 1.5;
+}
+[data-density='compact'] .prose-maris > * + * {
+  margin-top: 0.5em;
+}
+
+/* highlight.js tokens mapped onto the palette */
+.hljs {
+  color: var(--text);
+}
+.hljs-comment,
+.hljs-quote {
+  color: var(--text-3);
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in,
+.hljs-meta .hljs-keyword {
+  color: var(--petal);
+}
+.hljs-string,
+.hljs-attr,
+.hljs-template-tag,
+.hljs-addition {
+  color: var(--ok);
+}
+.hljs-number,
+.hljs-literal,
+.hljs-variable,
+.hljs-template-variable {
+  color: var(--pollen);
+}
+.hljs-title,
+.hljs-section,
+.hljs-function .hljs-title,
+.hljs-type,
+.hljs-class .hljs-title {
+  color: #6aa9ff;
+}
+.hljs-deletion {
+  color: var(--danger);
+}
+
+/* streaming caret, placed at the end of the last block */
+.caret > :last-child::after {
+  content: '';
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.12em;
+  background: var(--pollen);
+  border-radius: 2px;
+  animation: blink 1s steps(2, start) infinite;
+}
+@keyframes blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+/* pollen shimmer on live activity */
+.live {
+  background: linear-gradient(90deg, var(--text-2) 0%, var(--pollen) 50%, var(--text-2) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 2.2s linear infinite;
+}
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+/* The mark's shading is mixed from the accent, so custom themes get a matching cartridge. */
+.maris-mark {
+  --mark-shade: color-mix(in srgb, var(--petal) 70%, #1a1040);
+  --mark-ridge: color-mix(in srgb, var(--petal) 86%, #1a1040);
+  --mark-deep: color-mix(in srgb, var(--petal) 40%, #1a1040);
+}
+
+/* the one orchestrated moment: the cartridge slots in on an empty chat, then its seal pops on */
+.bloom .cart {
+  transform-box: view-box;
+  transform-origin: 32px 58px;
+  animation: slot-in 720ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.bloom .seal {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  animation: seal-pop 480ms 560ms cubic-bezier(0.3, 1.6, 0.5, 1) both;
+}
+@keyframes slot-in {
+  0% {
+    transform: translateY(-16px);
+    opacity: 0;
+  }
+  55% {
+    transform: translateY(1.5px) scale(1.03, 0.95);
+    opacity: 1;
+  }
+  78% {
+    transform: translateY(-0.6px) scale(0.99, 1.01);
+  }
+  100% {
+    transform: none;
+    opacity: 1;
+  }
+}
+@keyframes seal-pop {
+  from {
+    transform: scale(0) rotate(-60deg);
+  }
+  to {
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+[data-reduce-motion] *,
+[data-reduce-motion] *::before,
+[data-reduce-motion] *::after {
+  animation: none !important;
+  transition: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .live {
+    color: CanvasText;
+    background: none;
+  }
+}

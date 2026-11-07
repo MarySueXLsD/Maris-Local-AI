@@ -1,0 +1,127 @@
+appId: app.maris.local
+productName: Maris
+copyright: Copyright © 2026 MarySue
+directories:
+  # The npm scripts and the CI workflow put each system in its own folder: release/windows,
+  # release/linux and release/macos (-c.directories.output=...).
+  output: release
+  buildResources: resources
+# Shared by every system. No per-system `files:` lists: electron-builder reads a list with only
+# exclusions as "everything except…", which packed the whole project and stalled the asar step.
+# 7zip-bin is only used on Windows; the other systems carry its 1 MB Windows binary unused.
+files:
+  - out/**
+  - package.json
+  - '!**/*.map'
+  # The terminal command ships beside the app (extraResources / extraFiles), not inside it.
+  - '!out/cli/**'
+  - '!out/cli-bin/**'
+  - '!node_modules/7zip-bin/mac/**'
+  - '!node_modules/7zip-bin/linux/**'
+  - '!node_modules/7zip-bin/win/ia32/**'
+  - '!node_modules/7zip-bin/win/arm64/**'
+extraResources:
+  - from: resources/icon.png
+    to: icon.png
+  - from: resources/tray.png
+    to: tray.png
+  - from: resources/tray@2x.png
+    to: tray@2x.png
+  - from: resources/trayTemplate.png
+    to: trayTemplate.png
+  - from: resources/trayTemplate@2x.png
+    to: trayTemplate@2x.png
+  # The maris terminal command (scripts/build-cli.cjs); it runs on the app's own runtime.
+  - from: out/cli
+    to: cli
+asarUnpack:
+  - node_modules/7zip-bin/**
+npmRebuild: false
+# Ad-hoc signs the macOS app (Apple chips refuse to run unsigned code); see scripts/after-pack.cjs.
+afterPack: scripts/after-pack.cjs
+
+# ------------------------------------------------------------------ Windows
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: resources/icon.ico
+  executableName: Maris
+  # bin\maris.exe, the launcher the installer can put on PATH.
+  extraFiles:
+    - from: out/cli-bin
+      to: bin
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  # The Extras page (resources/installer.nsh) creates the desktop shortcut when it is ticked.
+  createDesktopShortcut: false
+  include: resources/installer.nsh
+  createStartMenuShortcut: true
+  shortcutName: Maris
+  installerIcon: resources/icon.ico
+  uninstallerIcon: resources/icon.ico
+  # Branded welcome/finish pages (24-bit BMPs from scripts/make-installer-art.cjs).
+  installerSidebar: resources/installerSidebar.bmp
+  uninstallerSidebar: resources/installerSidebar.bmp
+  installerHeader: resources/installerHeader.bmp
+  # The finish page starts Maris, which opens the setup assistant (PC scan + model picks) on first run.
+  runAfterFinish: true
+  artifactName: Maris-Setup-${version}.exe
+  deleteAppDataOnUninstall: false
+
+# ------------------------------------------------------------------ macOS (build on a Mac or in CI)
+mac:
+  target:
+    - target: dmg
+    - target: zip
+  icon: resources/icon.icns
+  category: public.app-category.productivity
+  darkModeSupport: true
+  # No Apple Developer ID here: the app is ad-hoc signed after packing. To sign it properly, remove this
+  # line and set CSC_LINK / CSC_KEY_PASSWORD (plus APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID to notarize).
+  identity: null
+  minimumSystemVersion: '12.0'
+  extendInfo:
+    NSAppleEventsUsageDescription: Maris opens Terminal for installers that ask for your password, and runs AppleScript that you approve.
+dmg:
+  artifactName: Maris-${version}-${arch}.dmg
+  title: Maris ${version}
+
+# ------------------------------------------------------------------ Linux
+linux:
+  target:
+    - AppImage
+    - deb
+    - rpm
+    - tar.gz
+  icon: resources/icon.png
+  category: Utility
+  executableName: maris
+  # Used by the tar.gz archive; AppImage, deb and rpm have their own names below.
+  artifactName: maris-${version}-linux-${arch}.${ext}
+  maintainer: MarySue
+  synopsis: Private local AI assistant
+  description: Maris is a private AI assistant that runs on your own computer, with chat, a coding helper, image and video generation, and changes only after you approve them.
+  desktop:
+    entry:
+      StartupWMClass: Maris
+      Keywords: AI;assistant;chat;LLM;
+appImage:
+  artifactName: Maris-${version}-${arch}.AppImage
+deb:
+  artifactName: maris_${version}_${arch}.deb
+  depends:
+    - libgtk-3-0 | libgtk-3-0t64
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0 | libatspi2.0-0t64
+    - libuuid1
+    - libsecret-1-0
+    - policykit-1 | pkexec
+rpm:
+  artifactName: maris-${version}.${arch}.rpm

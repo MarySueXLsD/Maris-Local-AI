@@ -1,0 +1,19 @@
+{
+  "appId": "app.maris.remote",
+  "appName": "Maris",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#14121c"
+  },
+  "plugins": {
+    "SystemBars": {
+      "insetsHandling": "css",
+      "initialViewportFitValueHint": "cover"
+    }
+  }
+}

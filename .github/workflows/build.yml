@@ -1,0 +1,161 @@
+# Builds Maris for Windows, macOS (Apple chips and Intel), Linux (x64 and ARM) and Android.
+# Run it from the Actions tab ("Run workflow") to get the installers as run artifacts.
+#
+# To ship an update: set "version" in package.json (for example 0.2.0), optionally write
+# release-notes/v0.2.0.md, commit, then push the tag v0.2.0. The workflow builds everything and
+# publishes a GitHub release with the installers. Every copy of Maris that is online then shows
+# "Maris 0.2.0 is available" in Updates & news, with the release notes under "What is new".
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::The tag $GITHUB_REF_NAME does not match the version in package.json ($version). Installed copies would keep offering this update."
+            exit 1
+          fi
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  desktop:
+    name: Desktop (${{ matrix.name }})
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            folder: windows
+            args: --win --x64
+          - name: macOS (Apple chips and Intel)
+            os: macos-latest
+            folder: macos
+            args: --mac --arm64 --x64
+          - name: Linux x64
+            os: ubuntu-latest
+            folder: linux
+            args: --linux --x64
+          - name: Linux ARM64
+            os: ubuntu-24.04-arm
+            folder: linux
+            # electron-builder's deb/rpm tool (fpm) ships for x64 only; AppImage and tar.gz cover ARM.
+            args: --linux AppImage tar.gz --arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Linux packaging tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm libarchive-tools
+      - run: npm ci
+      - run: npm run build
+      - run: npx electron-builder ${{ matrix.args }} --publish never -c.directories.output=release/${{ matrix.folder }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          # A code-signing certificate (docs/signing-and-antivirus.md): when these repository secrets are
+          # set, Maris.exe, bin\maris.exe, the installer and the uninstaller are all signed.
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      # SHA-256 of every download, for the release page and for antivirus false-positive reports.
+      - run: node scripts/checksums.cjs release/${{ matrix.folder }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Maris ${{ matrix.name }}
+          if-no-files-found: error
+          path: |
+            release/${{ matrix.folder }}/SHA256SUMS-*.txt
+            release/${{ matrix.folder }}/*.exe
+            release/${{ matrix.folder }}/*.dmg
+            release/${{ matrix.folder }}/*-mac.zip
+            release/${{ matrix.folder }}/*.AppImage
+            release/${{ matrix.folder }}/*.deb
+            release/${{ matrix.folder }}/*.rpm
+            release/${{ matrix.folder }}/*.tar.gz
+
+  android:
+    name: Android
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+      - run: npm ci
+      - run: npm ci
+        working-directory: mobile
+      - run: npm run mobile:build
+      - run: npx cap sync android
+        working-directory: mobile
+      - run: chmod +x gradlew && ./gradlew assembleDebug
+        working-directory: mobile/android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Maris Android
+          if-no-files-found: error
+          path: mobile/android/app/build/outputs/apk/debug/*.apk
+
+  release:
+    name: Publish the release
+    needs: [desktop, android]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Name the Android app and pick the release notes
+        id: notes
+        shell: bash
+        run: |
+          for apk in dist/*.apk; do mv "$apk" "dist/Maris-Link-${GITHUB_REF_NAME#v}-android.apk"; done
+          ls -la dist
+          notes="release-notes/$GITHUB_REF_NAME.md"
+          if [ -f "$notes" ]; then echo "file=$notes" >> "$GITHUB_OUTPUT"; fi
+      # A published (not draft, not pre-release) release is what the app's update check finds.
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Maris ${{ github.ref_name }}
+          files: dist/*
+          body_path: ${{ steps.notes.outputs.file }}
+          generate_release_notes: ${{ steps.notes.outputs.file == '' }}
+          fail_on_unmatched_files: true

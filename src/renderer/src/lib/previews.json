@@ -1,0 +1,199 @@
+{
+  "gpu": "NVIDIA GeForce RTX 5070 Ti",
+  "packs": {
+    "image-fast": [
+      {
+        "sample": "tree",
+        "file": "tree.jpg",
+        "seconds": 42.6,
+        "width": 1024,
+        "height": 1024
+      },
+      {
+        "sample": "fisherman",
+        "file": "fisherman.jpg",
+        "seconds": 47.7,
+        "width": 1024,
+        "height": 1024
+      },
+      {
+        "sample": "nook",
+        "file": "nook.jpg",
+        "seconds": 40.7,
+        "width": 1024,
+        "height": 1024
+      },
+      {
+        "sample": "fox",
+        "file": "fox.jpg",
+        "seconds": 39.7,
+        "width": 1024,
+        "height": 1024
+      }
+    ],
+    "image-quality": [
+      {
+        "sample": "tree",
+        "file": "tree.jpg",
+        "seconds": 144.7,
+        "width": 1024,
+        "height": 1024
+      },
+      {
+        "sample": "fisherman",
+        "file": "fisherman.jpg",
+        "seconds": 142.5,
+        "width": 1024,
+        "height": 1024
+      },
+      {
+        "sample": "nook",
+        "file": "nook.jpg",
+        "seconds": 174.3,
+        "width": 1024,
+        "height": 1024
+      },
+      {
+        "sample": "fox",
+        "file": "fox.jpg",
+        "seconds": 164.8,
+        "width": 1024,
+        "height": 1024
+      }
+    ],
+    "video-fast": [
+      {
+        "sample": "boat",
+        "file": "boat.mp4",
+        "poster": "boat.jpg",
+        "seconds": 176.9,
+        "width": 1280,
+        "height": 704
+      },
+      {
+        "sample": "lighthouse",
+        "file": "lighthouse.mp4",
+        "poster": "lighthouse.jpg",
+        "seconds": 164.9,
+        "width": 1280,
+        "height": 704
+      }
+    ],
+    "video-quality": [
+      {
+        "sample": "boat",
+        "file": "boat.mp4",
+        "poster": "boat.jpg",
+        "seconds": 103.2,
+        "width": 832,
+        "height": 480
+      },
+      {
+        "sample": "lighthouse",
+        "file": "lighthouse.mp4",
+        "poster": "lighthouse.jpg",
+        "seconds": 106.9,
+        "width": 832,
+        "height": 480
+      }
+    ],
+    "image-lite": [
+      {
+        "sample": "ramen",
+        "file": "ramen.jpg",
+        "seconds": 11.6,
+        "width": 1024,
+        "height": 1024
+      },
+      {
+        "sample": "rainy-car",
+        "file": "rainy-car.jpg",
+        "seconds": 11.6,
+        "width": 1024,
+        "height": 1024
+      },
+      {
+        "sample": "window-cat",
+        "file": "window-cat.jpg",
+        "seconds": 10.6,
+        "width": 1024,
+        "height": 1024
+      },
+      {
+        "sample": "alpine-lake",
+        "file": "alpine-lake.jpg",
+        "seconds": 11.6,
+        "width": 1024,
+        "height": 1024
+      }
+    ],
+    "image-sd15": [
+      {
+        "sample": "tree",
+        "file": "tree.jpg",
+        "seconds": 6.3,
+        "width": 512,
+        "height": 512
+      },
+      {
+        "sample": "fisherman",
+        "file": "fisherman.jpg",
+        "seconds": 6.4,
+        "width": 512,
+        "height": 512
+      },
+      {
+        "sample": "nook",
+        "file": "nook.jpg",
+        "seconds": 6.3,
+        "width": 512,
+        "height": 512
+      },
+      {
+        "sample": "fox",
+        "file": "fox.jpg",
+        "seconds": 5.3,
+        "width": 512,
+        "height": 512
+      }
+    ],
+    "video-lite": [
+      {
+        "sample": "boat",
+        "file": "boat.mp4",
+        "poster": "boat.jpg",
+        "seconds": 497.4,
+        "width": 832,
+        "height": 480
+      },
+      {
+        "sample": "lighthouse",
+        "file": "lighthouse.mp4",
+        "poster": "lighthouse.jpg",
+        "seconds": 915.9,
+        "width": 832,
+        "height": 480
+      }
+    ],
+    "video-quality-i2v": [
+      {
+        "sample": "fox-wakes",
+        "file": "fox-wakes.mp4",
+        "poster": "fox-wakes.jpg",
+        "seconds": 2236.3,
+        "width": 832,
+        "height": 480,
+        "start": "fox-wakes-start.jpg"
+      },
+      {
+        "sample": "tree-glow",
+        "file": "tree-glow.mp4",
+        "poster": "tree-glow.jpg",
+        "seconds": 3147.1,
+        "width": 832,
+        "height": 480,
+        "start": "tree-glow-start.jpg"
+      }
+    ]
+  }
+}

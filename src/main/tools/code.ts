@@ -1,0 +1,519 @@
+import { nativeImage } from 'electron'
+import { existsSync, readFileSync } from 'node:fs'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { settings } from '../settings'
+import { formatBytes, truncate, uid } from '../util'
+import { commandPrefix } from './classify'
+import { applyEdit, backup, decode, encodeLike, isBinary, makeDiff, readTextFile, riskFor, SKIP_DIRS, systemNote } from './fs'
+import { resolvePath } from './paths'
+import { processes } from './processes'
+import { IS_MAC, IS_WIN, SHELL_LABEL } from '../platform'
+import { runPosix, runPowerShell, runShell } from './shell'
+import { bool, num, schema, str, ToolError, type ToolDef } from './types'
+
+// Build output and dependency folders that are never worth searching.
+const CODE_SKIP = new Set([
+  ...SKIP_DIRS,
+  'bin',
+  'obj',
+  'target',
+  'dist',
+  'build',
+  'out',
+  '.vs',
+  '.idea',
+  '.vscode',
+  'export',
+  '.haxelib',
+  '.godot',
+  'library',
+  '.gradle',
+  'packages',
+  '.next',
+  'coverage',
+  '.mypy_cache',
+  '.pytest_cache',
+  '.tox',
+  'cmake-build-debug',
+  'cmake-build-release',
+  'x64',
+  'debug',
+  'release'
+])
+
+function globToRegex(glob: string): RegExp {
+  let re = ''
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]
+    if (c === '*') {
+      if (glob[i + 1] === '*') {
+        re += '.*'
+        i++
+        if (glob[i + 1] === '/' || glob[i + 1] === '\\') i++
+      } else re += '[^\\\\/]*'
+    } else if (c === '?') re += '[^\\\\/]'
+    else if (c === '{') re += '('
+    else if (c === '}') re += ')'
+    else if (c === ',') re += '|'
+    else if (c === '/' || c === '\\') re += '[\\\\/]'
+    else if ('.+^$()|[]'.includes(c)) re += '\\' + c
+    else re += c
+  }
+  return new RegExp(`^${re}$`, 'i')
+}
+
+/** Very small .gitignore support: name/glob patterns and folder patterns at the root. */
+function gitignore(root: string): ((rel: string, isDir: boolean) => boolean) | undefined {
+  const file = path.join(root, '.gitignore')
+  if (!existsSync(file)) return undefined
+  const rules = readFileSync(file, 'utf8')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('#') && !l.startsWith('!'))
+    .map((l) => {
+      const dirOnly = l.endsWith('/')
+      const anchored = l.startsWith('/') || l.replace(/\/$/, '').includes('/')
+      const pat = l.replace(/^\//, '').replace(/\/$/, '')
+      return { rx: globToRegex(pat), dirOnly, anchored }
+    })
+  return (rel, isDir) => {
+    const norm = rel.replace(/\\/g, '/')
+    const base = norm.split('/').pop() ?? norm
+    return rules.some((r) => (!r.dirOnly || isDir) && (r.anchored ? r.rx.test(norm) : r.rx.test(base)))
+  }
+}
+
+async function* walkFiles(root: string, limit = 20000): AsyncGenerator<string> {
+  const ignored = gitignore(root)
+  const queue = [root]
+  let n = 0
+  while (queue.length) {
+    const dir = queue.shift()!
+    let entries
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name)
+      const rel = path.relative(root, full)
+      if (e.isDirectory()) {
+        if (CODE_SKIP.has(e.name.toLowerCase()) || e.name.startsWith('.') && e.name !== '.github') continue
+        if (ignored?.(rel, true)) continue
+        queue.push(full)
+      } else if (e.isFile()) {
+        if (ignored?.(rel, false)) continue
+        yield full
+        if (++n >= limit) return
+      }
+    }
+  }
+}
+
+let devEnvCache: { at: number; text: string } | undefined
+
+const DEV_ENV_SCRIPT = String.raw`
+function V($name, [scriptblock]$probe) {
+  $exe = $name.Split(' ')[0]
+  if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) { "$($name): not installed"; return }
+  try { $o = (& $probe 2>&1 | Select-Object -First 3) -join ' ; '; if (-not $o) { $o = 'installed (nothing listed)' }; "$($name): $o" } catch { "$($name): installed" }
+}
+V 'dotnet' { dotnet --list-sdks }
+V 'rustc' { rustc --version }
+V 'cargo' { cargo --version }
+V 'python' { python --version }
+V 'py' { py -0p }
+V 'node' { node --version }
+V 'npm' { npm --version }
+V 'haxe' { haxe --version }
+V 'haxelib' { haxelib list | Select-String -Pattern '^(flixel|lime|openfl|hxcpp|flixel-tools|flixel-addons)\b' }
+V 'git' { git --version }
+V 'cmake' { cmake --version }
+V 'ninja' { ninja --version }
+V 'clang' { clang --version }
+V 'gcc' { gcc --version }
+V 'java' { java -version }
+V 'go' { go version }
+$vswhere = Join-Path ${'$'}{env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+if (Test-Path $vswhere) {
+  $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+  if ($vs) { "msvc: Visual Studio C++ tools at $vs (use a Developer PowerShell or vcvars64.bat for cl.exe)" } else { 'msvc: Visual Studio installed without C++ tools' }
+} else { 'msvc: not installed' }
+"windows: " + (Get-CimInstance Win32_OperatingSystem).Caption + " build " + [Environment]::OSVersion.Version.Build
+`
+
+// The same report for bash/zsh. Plain strings (no template literal) so the shell's ${...} stays intact.
+const DEV_ENV_POSIX = [
+  'v() { name="$1"; shift; exe="${1}"; if ! command -v "$exe" >/dev/null 2>&1; then echo "$name: not installed"; return; fi;',
+  '  out=$("$@" 2>&1 | head -n 3 | tr "\\n" ";" ); echo "$name: ${out:-installed}"; }',
+  'v dotnet dotnet --list-sdks',
+  'v rustc rustc --version',
+  'v cargo cargo --version',
+  'v python python3 --version',
+  'v node node --version',
+  'v npm npm --version',
+  'v haxe haxe --version',
+  'if command -v haxelib >/dev/null 2>&1; then echo "haxelib: $(haxelib list 2>/dev/null | grep -E "^(flixel|lime|openfl|hxcpp|flixel-tools|flixel-addons)[: ]" | tr "\\n" ";")"; else echo "haxelib: not installed"; fi',
+  'v git git --version',
+  'v cmake cmake --version',
+  'v ninja ninja --version',
+  'v clang clang --version',
+  'v gcc gcc --version',
+  'v java java -version',
+  'v go go version',
+  'v brew brew --version',
+  'if [ "$(uname)" = "Darwin" ]; then if xcode-select -p >/dev/null 2>&1; then echo "xcode: command line tools at $(xcode-select -p)"; else echo "xcode: not installed"; fi; fi',
+  'echo "os: $(uname -srm)"'
+].join('\n')
+
+/** Installed toolchains (cached for 10 minutes; `force` re-checks, e.g. after an install). */
+export async function devEnvReport(force = false): Promise<string> {
+  if (!force && devEnvCache && Date.now() - devEnvCache.at < 10 * 60000) return devEnvCache.text
+  const r = IS_WIN ? await runPowerShell(DEV_ENV_SCRIPT, { timeoutMs: 90000 }) : await runPosix(DEV_ENV_POSIX, { timeoutMs: 90000 })
+  const text = r.stdout || r.stderr || 'Could not detect tools.'
+  devEnvCache = { at: Date.now(), text }
+  return text
+}
+
+export const codeTools: ToolDef[] = [
+  {
+    name: 'project_tree',
+    risk: 'read',
+    description:
+      'Show the folder structure of the project (or any folder) as an indented tree, skipping build output, dependencies and .gitignored files. Start here to understand a codebase.',
+    parameters: schema({
+      path: { type: 'string', description: 'Folder (default: project root)' },
+      depth: { type: 'integer', description: 'Levels to show (default 3, max 6)' }
+    }),
+    async prepare(args, ctx) {
+      return { risk: 'read', title: `Map ${args.path ? resolvePath(String(args.path), ctx.cwd) : ctx.cwd}` }
+    },
+    async run(args, ctx) {
+      const root = args.path ? resolvePath(String(args.path), ctx.cwd) : ctx.cwd
+      const depth = Math.max(1, Math.min(6, num(args.depth, 3)))
+      const ignored = gitignore(root)
+      const lines: string[] = []
+      let count = 0
+      const walk = async (dir: string, level: number): Promise<void> => {
+        let entries
+        try {
+          entries = await fs.readdir(dir, { withFileTypes: true })
+        } catch {
+          return
+        }
+        entries = entries
+          .filter((e) => !(e.isDirectory() && (CODE_SKIP.has(e.name.toLowerCase()) || (e.name.startsWith('.') && e.name !== '.github'))))
+          .filter((e) => !ignored?.(path.relative(root, path.join(dir, e.name)), e.isDirectory()))
+          .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))
+        const shown = entries.slice(0, 60)
+        for (const e of shown) {
+          if (count >= 700) return
+          count++
+          const full = path.join(dir, e.name)
+          if (e.isDirectory()) {
+            lines.push(`${'  '.repeat(level)}${e.name}/`)
+            if (level + 1 < depth) await walk(full, level + 1)
+          } else {
+            const st = await fs.stat(full).catch(() => undefined)
+            lines.push(`${'  '.repeat(level)}${e.name}${st ? `  ${formatBytes(st.size)}` : ''}`)
+          }
+        }
+        if (entries.length > shown.length) lines.push(`${'  '.repeat(level)}… ${entries.length - shown.length} more`)
+      }
+      await walk(root, 0)
+      return `${root}\n${lines.join('\n') || '(empty)'}${count >= 700 ? '\n… (tree truncated; use a deeper path)' : ''}`
+    }
+  },
+  {
+    name: 'grep',
+    risk: 'read',
+    description:
+      'Search file contents with a regular expression across the project (skips build output, dependencies and .gitignored files). Returns path:line: text. Use to find definitions, usages, TODOs or error messages.',
+    parameters: schema(
+      {
+        pattern: { type: 'string', description: 'Regular expression (JavaScript syntax), e.g. class\\s+Player' },
+        path: { type: 'string', description: 'Folder or file to search (default: project root)' },
+        glob: { type: 'string', description: 'Only files matching this name glob, e.g. *.cs or *.{hx,xml}' },
+        ignore_case: { type: 'boolean', description: 'Case-insensitive (default true)' },
+        context: { type: 'integer', description: 'Lines of context around each match (0-5, default 0)' },
+        max_results: { type: 'integer', description: 'Max matches (default 80)' }
+      },
+      ['pattern']
+    ),
+    async prepare(args) {
+      return { risk: 'read', title: `Search code for /${str(args.pattern, 'pattern')}/${args.glob ? ` in ${args.glob}` : ''}` }
+    },
+    async run(args, ctx) {
+      let rx: RegExp
+      try {
+        rx = new RegExp(str(args.pattern, 'pattern'), bool(args.ignore_case, true) ? 'i' : '')
+      } catch (e) {
+        throw new ToolError(`Invalid regular expression: ${(e as Error).message}`)
+      }
+      const target = args.path ? resolvePath(String(args.path), ctx.cwd) : ctx.cwd
+      const glob = args.glob ? globToRegex(String(args.glob)) : undefined
+      const ctxLines = Math.max(0, Math.min(5, num(args.context, 0)))
+      const max = Math.max(1, Math.min(400, num(args.max_results, 80)))
+      const st = await fs.stat(target).catch(() => undefined)
+      if (!st) throw new ToolError(`Not found: ${target}`)
+      const files: AsyncIterable<string> = st.isFile() ? (async function* () { yield target })() : walkFiles(target)
+      const out: string[] = []
+      let matches = 0
+      let scanned = 0
+      const started = Date.now()
+      for await (const f of files) {
+        if (matches >= max || Date.now() - started > 20000 || ctx.signal.aborted) break
+        if (glob && !glob.test(path.basename(f))) continue
+        const size = (await fs.stat(f).catch(() => undefined))?.size ?? 0
+        if (size > 1.5 * 2 ** 20) continue
+        const buf = await fs.readFile(f).catch(() => undefined)
+        if (!buf || isBinary(buf)) continue
+        scanned++
+        const lines = decode(buf).split(/\r?\n/)
+        const rel = path.relative(ctx.cwd, f) || f
+        for (let i = 0; i < lines.length && matches < max; i++) {
+          if (!rx.test(lines[i])) continue
+          matches++
+          if (ctxLines) {
+            const from = Math.max(0, i - ctxLines)
+            const to = Math.min(lines.length - 1, i + ctxLines)
+            out.push(`${rel}:${i + 1}:`)
+            for (let j = from; j <= to; j++) out.push(`${j === i ? '>' : ' '} ${j + 1}│${lines[j].slice(0, 240)}`)
+          } else out.push(`${rel}:${i + 1}: ${lines[i].trim().slice(0, 240)}`)
+        }
+      }
+      return `${matches} match(es) in ${scanned} file(s)${matches >= max ? ' (limit reached)' : ''}\n${out.join('\n') || '(no matches)'}`
+    }
+  },
+  {
+    name: 'multi_edit',
+    risk: 'change',
+    description:
+      'Apply several exact text replacements to ONE file in a single step (all or nothing). Each old_text must match the file exactly and be unique unless replace_all. Use for refactors touching several places in a file.',
+    parameters: schema(
+      {
+        path: { type: 'string', description: 'File path' },
+        edits: {
+          type: 'array',
+          description: 'Replacements, applied in order',
+          items: {
+            type: 'object',
+            properties: {
+              old_text: { type: 'string', description: 'Exact text to find' },
+              new_text: { type: 'string', description: 'Replacement' },
+              replace_all: { type: 'boolean', description: 'Replace every occurrence' }
+            },
+            required: ['old_text', 'new_text']
+          }
+        }
+      },
+      ['path', 'edits']
+    ),
+    async prepare(args, ctx) {
+      const p = resolvePath(str(args.path, 'path'), ctx.cwd)
+      const { text } = await readTextFile(p)
+      const next = applyAll(text, args.edits)
+      return { risk: riskFor(p), title: `Edit ${p} (${(args.edits as unknown[]).length} changes)`, detail: systemNote(p), preview: makeDiff(p, text, next, false), targets: [p] }
+    },
+    async run(args, ctx) {
+      const p = resolvePath(str(args.path, 'path'), ctx.cwd)
+      const { text, raw } = await readTextFile(p)
+      const next = applyAll(text, args.edits)
+      const bak = await backup(p)
+      if (bak) ctx.reportBackup(bak)
+      await fs.writeFile(p, encodeLike(raw, next))
+      return `Applied ${(args.edits as unknown[]).length} edit(s) to ${p}`
+    }
+  },
+  {
+    name: 'view_image',
+    risk: 'read',
+    description: 'Look at an image file (screenshot, sprite, UI mockup, diagram). Requires a vision-capable model.',
+    parameters: schema({ path: { type: 'string', description: 'Image file path (png, jpg, webp, bmp, gif)' } }, ['path']),
+    async prepare(args, ctx) {
+      return { risk: 'read', title: `Look at ${resolvePath(str(args.path, 'path'), ctx.cwd)}` }
+    },
+    async run(args, ctx) {
+      const p = resolvePath(str(args.path, 'path'), ctx.cwd)
+      if (!existsSync(p)) throw new ToolError(`Image not found: ${p}`)
+      let img = nativeImage.createFromPath(p)
+      if (img.isEmpty()) throw new ToolError('Not an image Windows can read (try PNG or JPEG)')
+      const { width, height } = img.getSize()
+      ctx.setPreview(`data:image/jpeg;base64,${img.resize({ width: Math.min(480, width) }).toJPEG(70).toString('base64')}`)
+      if (!ctx.modelSupportsVision) return `Image ${width}x${height}. The current model cannot see images; switch to a vision model (Qwen3.5/3.8 can).`
+      const scale = Math.min(1, 1280 / Math.max(width, height))
+      if (scale < 1) img = img.resize({ width: Math.round(width * scale), height: Math.round(height * scale), quality: 'best' })
+      ctx.attachImageForModel(img.toJPEG(85).toString('base64'), `Image ${path.basename(p)} (${width}x${height})`)
+      return `Image ${path.basename(p)} is ${width}x${height}. It is attached for you to look at.`
+    }
+  },
+  {
+    name: 'start_process',
+    risk: 'system',
+    description:
+      'Start a long-running command in the background (dev server, file watcher, game in test mode) and return its id. Read its output with process_output and end it with stop_process. Needs approval unless the user always-allowed the command.',
+    parameters: schema(
+      {
+        command: { type: 'string', description: `${SHELL_LABEL} command, e.g. npm run dev` },
+        cwd: { type: 'string', description: 'Working folder (default: project root)' },
+        name: { type: 'string', description: 'Short label' }
+      },
+      ['command']
+    ),
+    async prepare(args, ctx) {
+      const command = str(args.command, 'command')
+      const cwd = args.cwd ? resolvePath(String(args.cwd), ctx.cwd) : ctx.cwd
+      return {
+        risk: 'system',
+        title: `Start in background: ${command.slice(0, 90)}`,
+        preview: { kind: 'command', command, cwd, shell: `${SHELL_LABEL} (background)` },
+        allowPrefix: commandPrefix(command)
+      }
+    },
+    async run(args, ctx) {
+      const command = str(args.command, 'command')
+      const cwd = args.cwd ? resolvePath(String(args.cwd), ctx.cwd) : ctx.cwd
+      const p = processes.start(command, cwd, ctx.conversationId, args.name ? String(args.name) : undefined)
+      await new Promise((r) => setTimeout(r, 4000))
+      return `Started process ${p.id}.\n${processes.output(p.id, 40)}`
+    }
+  },
+  {
+    name: 'process_output',
+    risk: 'read',
+    description: 'Read the latest output of a background process started with start_process.',
+    parameters: schema(
+      {
+        id: { type: 'string', description: 'Process id' },
+        tail_lines: { type: 'integer', description: 'How many recent lines (default 80)' }
+      },
+      ['id']
+    ),
+    async prepare(args) {
+      return { risk: 'read', title: `Read output of process ${str(args.id, 'id')}` }
+    },
+    async run(args) {
+      return processes.output(str(args.id, 'id'), num(args.tail_lines, 80))
+    }
+  },
+  {
+    name: 'stop_process',
+    risk: 'read',
+    description: 'Stop a background process that Maris started (start_process). Cannot stop other programs.',
+    parameters: schema({ id: { type: 'string', description: 'Process id' } }, ['id']),
+    async prepare(args) {
+      return { risk: 'read', title: `Stop process ${str(args.id, 'id')}` }
+    },
+    async run(args) {
+      return processes.stop(str(args.id, 'id')) ? `Stopped ${args.id}` : `No process ${args.id}`
+    }
+  },
+  {
+    name: 'dev_environment',
+    risk: 'read',
+    description: `List the installed developer toolchains and versions: .NET SDKs, Rust, Python, Node, Haxe/HaxeFlixel libraries, Git, CMake, ${IS_WIN ? 'MSVC C++ tools, ' : IS_MAC ? 'Xcode command line tools, ' : ''}clang/gcc, Java, Go. Check this before building or suggesting installs.`,
+    parameters: schema({}),
+    async prepare() {
+      return { risk: 'read', title: 'Check installed developer tools' }
+    },
+    async run() {
+      return devEnvReport()
+    }
+  },
+  {
+    name: 'update_plan',
+    risk: 'read',
+    description:
+      'Keep a short visible checklist for multi-step work. Call it at the start of a larger task and again whenever a step starts or finishes. Statuses: pending, in_progress, done.',
+    parameters: schema(
+      {
+        steps: {
+          type: 'array',
+          description: 'All steps in order',
+          items: {
+            type: 'object',
+            properties: {
+              text: { type: 'string', description: 'Step description' },
+              status: { type: 'string', description: 'pending, in_progress or done', enum: ['pending', 'in_progress', 'done'] }
+            },
+            required: ['text', 'status']
+          }
+        }
+      },
+      ['steps']
+    ),
+    async prepare() {
+      return { risk: 'read', title: 'Plan' }
+    },
+    async run(args) {
+      const steps = Array.isArray(args.steps) ? (args.steps as { text: string; status: string }[]) : []
+      const done = steps.filter((s) => s.status === 'done').length
+      return `Plan updated: ${done}/${steps.length} done.`
+    }
+  },
+  {
+    name: 'run_script',
+    risk: 'system',
+    description: IS_WIN
+      ? 'Run a multi-line script and return its output. language: powershell (full Windows access: .NET, WMI/CIM, COM, registry, and Win32 APIs through Add-Type with C# P/Invoke), python or node. The user must approve.'
+      : `Run a multi-line script and return its output. language: ${IS_MAC ? 'zsh/bash (with macOS tools such as osascript, defaults, system_profiler)' : 'bash'}, python or node. The user must approve.`,
+    parameters: schema(
+      {
+        language: { type: 'string', description: 'Script language', enum: IS_WIN ? ['powershell', 'python', 'node'] : ['bash', 'python', 'node'] },
+        code: { type: 'string', description: 'The script' },
+        cwd: { type: 'string', description: 'Working folder (default: project root or home)' },
+        timeout_sec: { type: 'integer', description: 'Max runtime (default 120)' }
+      },
+      ['language', 'code']
+    ),
+    async prepare(args, ctx) {
+      const lang = str(args.language, 'language')
+      const code = str(args.code, 'code')
+      return {
+        risk: 'system',
+        title: `Run a ${lang} script (${code.split('\n').length} lines)`,
+        preview: { kind: 'command', command: code, cwd: args.cwd ? resolvePath(String(args.cwd), ctx.cwd) : ctx.cwd, shell: lang }
+      }
+    },
+    async run(args, ctx) {
+      const lang = str(args.language, 'language')
+      const code = str(args.code, 'code')
+      const cwd = args.cwd ? resolvePath(String(args.cwd), ctx.cwd) : ctx.cwd
+      const timeoutMs = Math.min(1800, Math.max(5, num(args.timeout_sec, settings.get().agent.commandTimeoutSec))) * 1000
+      if (lang === 'powershell' || lang === 'bash' || lang === 'sh' || lang === 'zsh') {
+        const r = await runShell(code, { cwd, timeoutMs, signal: ctx.signal })
+        return `(exit ${r.code ?? '?'}${r.timedOut ? ', timed out' : ''})\n${truncate([r.stdout, r.stderr].filter(Boolean).join('\n') || '(no output)', 24000)}`
+      }
+      const dir = path.join(os.tmpdir(), 'maris-scripts')
+      await fs.mkdir(dir, { recursive: true })
+      const file = path.join(dir, `${uid()}.${lang === 'python' ? 'py' : 'mjs'}`)
+      await fs.writeFile(file, code, 'utf8')
+      try {
+        const exe = lang === 'python' ? (IS_WIN ? 'python' : 'python3') : 'node'
+        const r = IS_WIN
+          ? await runPowerShell(`& ${exe} '${file.replace(/'/g, "''")}'`, { cwd, timeoutMs, signal: ctx.signal })
+          : await runPosix(`${exe} '${file.replace(/'/g, `'\\''`)}'`, { cwd, timeoutMs, signal: ctx.signal })
+        return `(exit ${r.code ?? '?'}${r.timedOut ? ', timed out' : ''})\n${truncate([r.stdout, r.stderr].filter(Boolean).join('\n') || '(no output)', 24000)}`
+      } finally {
+        await fs.rm(file, { force: true })
+      }
+    }
+  }
+]
+
+function applyAll(text: string, edits: unknown): string {
+  if (!Array.isArray(edits) || !edits.length) throw new ToolError('edits must be a non-empty list')
+  let out = text
+  edits.forEach((e, i) => {
+    const ed = e as { old_text?: string; new_text?: string; replace_all?: boolean }
+    try {
+      out = applyEdit(out, String(ed.old_text ?? ''), String(ed.new_text ?? ''), Boolean(ed.replace_all))
+    } catch (err) {
+      throw new ToolError(`Edit ${i + 1}: ${(err as Error).message}`)
+    }
+  })
+  return out
+}
