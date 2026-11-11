@@ -10,8 +10,9 @@ export default defineConfig({
     resolve: { alias: shared },
     build: {
       // The MCP SDK (connectors) is bundled: only its client part is used, and its full dependency
-      // tree (an HTTP server framework among others) would otherwise ship with the app.
-      externalizeDeps: { exclude: ['@modelcontextprotocol/sdk'] },
+      // tree (an HTTP server framework among others) would otherwise ship with the app. The same goes
+      // for the Anthropic SDK (Claude models): bundled, so the installed app needs no node_modules for it.
+      externalizeDeps: { exclude: ['@modelcontextprotocol/sdk', '@anthropic-ai/sdk'] },
       rollupOptions: { input: { index: resolve(__dirname, 'src/main/index.ts') } }
     }
   },

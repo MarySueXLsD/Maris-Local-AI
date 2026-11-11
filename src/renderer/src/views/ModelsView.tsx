@@ -1,4 +1,4 @@
-import { Clapperboard, Download, ExternalLink, Eye, Hammer, Image as ImageIcon, Lightbulb, MessageSquareText, Power, Trash2, Wand2, X } from 'lucide-react'
+import { Clapperboard, Cloud, Download, ExternalLink, Eye, Hammer, Image as ImageIcon, Lightbulb, MessageSquareText, Power, Trash2, Wand2, X } from 'lucide-react'
 import { Dialog } from 'radix-ui'
 import { useEffect, useState } from 'react'
 import type { CatalogModel, ModelDetails, ModelInfo, PcScan, PullProgress, Tier } from '@shared/types'
@@ -9,6 +9,7 @@ import { useApp } from '../store'
 import { Button, cn, inputCls, PageHeader, Progress, Section, Spinner } from '../components/ui'
 import { Term, withTerms } from '../components/Term'
 import { DEVICE, REMOTE } from '../lib/platform'
+import { ApiTab } from './ApiModels'
 import { MediaTab } from './MediaModels'
 
 const ROLES: { key: Tier | 'embed' | 'code'; label: string; hint: string }[] = [
@@ -270,6 +271,10 @@ function TextTab() {
   }, [refresh])
 
   const loaded = new Map(status?.ollama.loaded.map((m) => [m.name, m]) ?? [])
+  // Models in Ollama on this computer; the ones of API services are listed on the API tab.
+  const local = models.filter((m) => !m.provider)
+  const services = [...new Set(models.filter((m) => m.provider).map((m) => m.providerName ?? m.provider!))]
+  const lite = Boolean(status?.lite)
   const budget = scan ? budgetOf(scan) : undefined
   /** How fast a model answers on this computer, from the PC scan (the same estimate setup uses). */
   const speedHere = (c?: CatalogModel): string | undefined => {
@@ -278,7 +283,8 @@ function TextTab() {
     if (!pl.fits) return pl.note ?? 'Too big for this computer'
     return `${pl.speed} here, ${pl.where === 'gpu' ? 'fully on the graphics card' : pl.where === 'cpu' ? 'on the processor' : 'partly in system memory'}`
   }
-  const installed = new Set(models.map((m) => m.name))
+  const installed = new Set(local.map((m) => m.name))
+  const toGet = catalog.filter((c) => !installed.has(c.name))
   const pull = (name: string): void => {
     setPulls((s) => ({ ...s, [name]: { model: name, status: 'starting' } }))
     void api.models.pull(name).catch(() => undefined)
@@ -289,21 +295,44 @@ function TextTab() {
       <Section title="Roles" description="Which installed model plays each part. Maris fills these in automatically when you install models.">
         <div className="divide-y divide-line rounded-xl border border-line">
           {ROLES.map((r) => {
-            const options = models.filter((m) => (r.key === 'embed' ? m.capabilities.includes('embedding') : !m.capabilities.includes('embedding')))
+            // Memory search needs an embedding model in Ollama; every other role can also go to a model of an API service.
+            const options = (r.key === 'embed' ? local : models).filter((m) => (r.key === 'embed' ? m.capabilities.includes('embedding') : !m.capabilities.includes('embedding')))
+            const here = options.filter((m) => !m.provider)
             const value = settings?.tiers[r.key] ?? ''
+            // A role held by a model at an API service sends things there: say what, right where it is chosen.
+            const chosen = models.find((m) => m.name === value)
+            const away = chosen?.remote === true ? (chosen.providerName ?? 'its service') : undefined
             return (
               <div key={r.key} className="flex flex-wrap items-center gap-3 px-4 py-3">
                 <div className="min-w-48 flex-1">
                   <p className="text-[0.95rem] text-text">{r.label}</p>
                   <p className="text-[0.82rem] text-text-2">{r.hint}</p>
+                  {away && (
+                    <p className="mt-0.5 text-[0.78rem] text-pollen">
+                      {r.key === 'tiny' ? `Chat titles and memory upkeep send excerpts of your chats to ${away}.` : `Chats that Auto gives this role are sent to ${away}.`}
+                    </p>
+                  )}
                 </div>
                 <select aria-label={`${r.label} model`} value={value} onChange={(e) => void update({ tiers: { [r.key]: e.target.value } })} className={cn(inputCls, 'w-64')}>
-                  {r.key === 'code' ? <option value="">Same as Max</option> : !value && <option value="">Not set</option>}
-                  {options.map((m) => (
+                  {/* "Not set" stays available, so a model of an API service can be taken out of a role again. */}
+                  {r.key === 'code' ? <option value="">Same as Max</option> : (!value || away) && <option value="">Not set</option>}
+                  {here.map((m) => (
                     <option key={m.name} value={m.name}>
                       {prettyModel(m.name)} ({bytes(m.sizeBytes)})
                     </option>
                   ))}
+                  {services.map((s) => {
+                    const theirs = options.filter((m) => (m.providerName ?? m.provider) === s)
+                    return theirs.length ? (
+                      <optgroup key={s} label={`${s}${theirs[0]!.remote === false ? ' (on this computer)' : ' (sent to the service)'}`}>
+                        {theirs.map((m) => (
+                          <option key={m.name} value={m.name}>
+                            {m.label ?? prettyModel(m.name)}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ) : null
+                  })}
                 </select>
               </div>
             )
@@ -313,8 +342,8 @@ function TextTab() {
 
       <Section title="Installed" description="Loaded models stay in memory for 30 minutes after their last use, so follow-up questions start instantly.">
         <div className="divide-y divide-line rounded-xl border border-line">
-          {models.length === 0 && <p className="px-4 py-4 text-[0.9rem] text-text-2">No models yet. Install one below.</p>}
-          {models.map((m) => {
+          {local.length === 0 && <p className="px-4 py-4 text-[0.9rem] text-text-2">No models on this computer yet. Install one below, or add an API key on the API tab.</p>}
+          {local.map((m) => {
             const l = loaded.get(m.name)
             const gpuPct = l && l.sizeBytes ? Math.round((l.vramBytes / l.sizeBytes) * 100) : 0
             const c = catalog.find((x) => x.name === m.name)
@@ -354,9 +383,28 @@ function TextTab() {
       </Section>
 
       <Section title="Get more models" description="Downloads come from the Ollama library or Hugging Face. Sizes are what lands on disk.">
+        {[
+          { key: 'main', list: toGet.filter((c) => !c.light), title: '', note: '' },
+          {
+            key: 'light',
+            list: toGet.filter((c) => c.light),
+            title: 'Small and older models for slow computers',
+            note: `They answer at a usable pace without a graphics card, on old processors and with 4 to 8 GB of memory. ${lite ? 'Low-power mode is on, so these are the ones that suit this computer.' : 'Low-power mode (Settings → Engine) helps them along.'}`
+          }
+        ]
+          // On a slow computer the small models come first.
+          .sort((a, b) => (lite ? Number(b.key === 'light') - Number(a.key === 'light') : 0))
+          .filter((g) => g.list.length > 0)
+          .map((g) => (
+        <div key={g.key} className="mt-5 first:mt-0">
+          {g.title && (
+            <>
+              <h3 className="text-[0.98rem] font-medium text-text">{g.title}</h3>
+              <p className="mt-0.5 mb-2 max-w-[68ch] text-[0.84rem] leading-snug text-text-2">{g.note}</p>
+            </>
+          )}
         <div className="divide-y divide-line rounded-xl border border-line">
-          {catalog
-            .filter((c) => !installed.has(c.name))
+          {g.list
             .map((c) => {
               const p = pulls[c.name]
               const active = p && !p.done
@@ -401,6 +449,8 @@ function TextTab() {
               )
             })}
         </div>
+        </div>
+          ))}
         {!REMOTE && (
           <div className="mt-4 flex gap-2">
             <input className={inputCls} placeholder="Any Ollama tag, e.g. gemma4:12b, or hf.co/user/repo:Q4_K_M" value={custom} onChange={(e) => setCustom(e.target.value)} aria-label="Model to download" />
@@ -451,7 +501,8 @@ function TextTab() {
 const TABS = [
   { value: 'text', label: 'Text', icon: MessageSquareText, hint: 'Language models that chat, write and code' },
   { value: 'image', label: 'Pictures', icon: ImageIcon, hint: 'Models that draw pictures from a description' },
-  { value: 'video', label: 'Videos', icon: Clapperboard, hint: 'Models that make short clips, or animate a picture' }
+  { value: 'video', label: 'Videos', icon: Clapperboard, hint: 'Models that make short clips, or animate a picture' },
+  { value: 'api', label: 'API', icon: Cloud, hint: 'Claude, GPT, Gemini and other models through an API key, or another model server on this computer' }
 ] as const
 
 export function ModelsView() {
@@ -474,6 +525,8 @@ export function ModelsView() {
               </>
             ) : tab === 'image' ? (
               `Models that draw pictures on your own graphics card. Pick one in the message box (Image) or let Maris choose; chats keep working on the processor while a picture renders.`
+            ) : tab === 'api' ? (
+              `Models that run somewhere else: Claude, GPT, Gemini and many more through your own API key, or a model server such as LM Studio on this ${DEVICE}. A good way to get fast, strong answers on a ${DEVICE} that is too slow for big models.`
             ) : (
               `Models that make short clips, from a description or from one of your pictures. Video takes minutes; chats keep working on the processor meanwhile.`
             )
@@ -517,7 +570,7 @@ export function ModelsView() {
           ))}
         </div>
 
-        {tab === 'text' ? <TextTab /> : <MediaTab key={tab} kind={tab} />}
+        {tab === 'text' ? <TextTab /> : tab === 'api' ? <ApiTab /> : <MediaTab key={tab} kind={tab} />}
       </div>
     </div>
   )

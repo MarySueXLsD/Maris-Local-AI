@@ -6,13 +6,20 @@ import { randomUUID } from 'node:crypto'
 import type { DiskInfo, GpuInfo, PcScan } from '@shared/types'
 import { ollama } from '../engines/ollama'
 import { comfy } from '../media/comfy'
+import { isLitePc } from '@shared/recommend'
+import { rememberLitePc } from '../perf'
 import { IS_MAC, IS_WIN, osDescription } from '../platform'
 import { runPowerShell } from '../tools/shell'
 import { log } from '../util'
+import { guessCpuFlags } from './cpuFlags'
 import { describeGpu, IGNORE_GPU } from './gpus'
 import { scanPosix, type PosixGpu } from './scanPosix'
 
 interface RawScan {
+  /** What the system itself says the processor can do, where it says. */
+  cpuFlags?: { avx?: boolean; avx2?: boolean; avx512?: boolean }
+  /** Windows: "Intel64 Family 6 Model 58 Stepping 9, GenuineIntel". */
+  cpuId?: string
   cpu?: { name?: string; cores?: number; threads?: number }
   mem?: { speed?: number; type?: number; sticks?: number }
   gpus?: { name?: string; vram?: number; driver?: string }[]
@@ -50,6 +57,7 @@ async function posixRaw(): Promise<RawScan> {
     const r = await scanPosix()
     return {
       cpu: r.cpu,
+      cpuFlags: r.cpuFlags,
       mem: { speed: r.mem.speed, sticks: r.mem.sticks },
       memTypeName: r.mem.type,
       posixGpus: r.gpus,
@@ -97,6 +105,11 @@ try {
   $o.laptop = (@($ch | Where-Object { $_ -in 8,9,10,11,12,14,18,21,30,31,32 }).Count -gt 0) -or [bool](Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue)
 } catch { $o.laptop = $false }
 $o.winget = [bool](Get-Command winget -ErrorAction SilentlyContinue)
+$o.cpuId = "$env:PROCESSOR_IDENTIFIER"
+try {
+  $k = Add-Type -MemberDefinition '[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(uint feature);' -Name 'MarisCpu' -Namespace 'MarisWin32' -PassThru
+  $o.cpuFlags = @{ avx = [bool]$k::IsProcessorFeaturePresent(39); avx2 = [bool]$k::IsProcessorFeaturePresent(40); avx512 = [bool]$k::IsProcessorFeaturePresent(41) }
+} catch {}
 $o | ConvertTo-Json -Depth 5 -Compress | Set-Content -LiteralPath '${out.replace(/'/g, "''")}' -Encoding UTF8
 `
 
@@ -143,6 +156,8 @@ export async function scanPc(): Promise<PcScan> {
   // Tests can stand in another PC (tests/e2e/setup-pcs.mjs) to check the assistant on other hardware.
   if (process.env.MARIS_FAKE_SCAN) {
     last = { ...(JSON.parse(readFileSync(process.env.MARIS_FAKE_SCAN, 'utf8')) as PcScan), ts: Date.now() }
+    last.lite = isLitePc(last)
+    rememberLitePc(last.lite)
     return last
   }
   const [raw, smi, ollamaVersion] = await Promise.all([IS_WIN ? windowsRaw() : posixRaw(), nvidiaSmi(), ollama.version()])
@@ -181,8 +196,12 @@ export async function scanPc(): Promise<PcScan> {
   const cpuName = (raw.cpu?.name || cpus[0]?.model || 'Unknown CPU').replace(/\s+/g, ' ').trim()
   const threads = raw.cpu?.threads || cpus.length
   const cores = raw.cpu?.cores || Math.max(1, Math.round(threads / 2))
-  const old = /atom|celeron|pentium|core\(tm\)2|phenom|athlon ii|core\(tm\) i[357]-[2-3]\d{3}/i.test(cpuName)
-  const avx512 = /ryzen.*\b(7|8|9)\d{3}|ryzen ai|epyc|threadripper (7|9)\d{3}|xeon|i[579]-1[01]\d{2}/i.test(cpuName)
+  // AVX2 decides how fast models run on the processor. The system's own answer wins; where it gives
+  // none (an old Windows build answers "no" to everything it does not know), the name and model decide.
+  const said = raw.cpuFlags && (raw.cpuFlags.avx || raw.cpuFlags.avx2 || raw.cpuFlags.avx512) ? raw.cpuFlags : undefined
+  const guess = guessCpuFlags(cpuName, raw.cpuId ?? process.env.PROCESSOR_IDENTIFIER ?? '')
+  const avx2 = said ? Boolean(said.avx2) : guess.avx2
+  const avx512 = said ? Boolean(said.avx512) : guess.avx512
   const smbios: Record<number, string> = { 24: 'DDR3', 26: 'DDR4', 34: 'DDR5', 35: 'LPDDR5' }
   const memType = raw.memTypeName || (typeof raw.mem?.type === 'number' ? smbios[raw.mem.type] : undefined)
   const speed = raw.mem?.speed || (/DDR5/i.test(memType ?? '') ? 5200 : memType === 'DDR4' ? 3200 : 2400)
@@ -202,7 +221,7 @@ export async function scanPc(): Promise<PcScan> {
     ts: Date.now(),
     platform: process.platform === 'darwin' ? 'darwin' : process.platform === 'win32' ? 'win32' : 'linux',
     os: raw.os || osDescription(),
-    cpu: { name: cpuName, cores, threads, avx2: !old, avx512 },
+    cpu: { name: cpuName, cores, threads, avx2, avx512 },
     ram: { totalMB: Math.round(os.totalmem() / 2 ** 20), freeMB: Math.round(os.freemem() / 2 ** 20), speedMTs: raw.mem?.speed || undefined, type: memType, bandwidthGBs },
     gpus,
     gpu,
@@ -214,6 +233,9 @@ export async function scanPc(): Promise<PcScan> {
     brew: raw.brew,
     notes
   }
+  last.lite = isLitePc(last)
+  // Remembered, so the next start knows whether low-power mode applies without scanning again.
+  rememberLitePc(last.lite)
   log.info('scan', `${cpuName}, ${Math.round(last.ram.totalMB / 1024)} GB RAM, GPU: ${gpu ? `${gpu.name} ${Math.round(gpu.vramMB / 1024)} GB (${gpu.llm}/${gpu.comfy})` : 'none'}`)
   return last
 }

@@ -262,8 +262,12 @@ class Feed {
     const file = this.update.downloaded
     if (!file || !existsSync(file) || !this.update.ready) throw new Error('The update is not ready yet.')
     if (process.platform === 'win32') {
+      // Ask first if an answer or a download is still going; then the installer takes over. Maris starts
+      // again right after it, so the Ollama server is left running.
+      const { confirmQuit, requestQuit } = await import('../quit')
+      if (!confirmQuit()) throw new Error('The update was not installed, because Maris is still working. Try again when it is done.')
       spawn(file, ['--updated', '/S', '--force-run'], { detached: true, stdio: 'ignore' }).unref()
-      setTimeout(() => app.quit(), 600)
+      setTimeout(() => void requestQuit({ restarting: true, force: true }), 600)
       return
     }
     const pkg = linuxPackage()

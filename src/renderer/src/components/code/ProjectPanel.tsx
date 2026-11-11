@@ -273,7 +273,7 @@ function changesOf(messages: ChatMessage[]): Change[] {
           const rows = content.replace(/\r?\n$/, '').split(/\r?\n/)
           const diff = content ? `@@ -0,0 +1,${rows.length} @@\n${rows.map((l) => `+${l}`).join('\n')}` : undefined
           const n = counts(diff)
-          if (files[i]) out.push({ key: `${c.id}:${i}`, kind: replaced ? 'changed' : 'added', path: t, diff, add: n.add, del: replaced ? 0 : 0, call: c })
+          if (files[i]) out.push({ key: `${c.id}:${i}`, kind: replaced ? 'changed' : 'added', path: t, diff, add: n.add, del: 0, call: c })
         })
         continue
       }
@@ -353,6 +353,7 @@ function Changes({ messages }: { messages: ChatMessage[] }) {
   const project = useApp((s) => s.project)
   const [diff, setDiff] = useState<Change>()
   const [reverted, setReverted] = useState<Set<string>>(new Set())
+  const [failed, setFailed] = useState<Record<string, string>>({})
   const changes = useMemo(() => changesOf(messages), [messages])
   if (!changes.length) return <p className="px-3 py-4 text-[0.84rem] text-text-3">Files Maris adds, changes or deletes in this task show up here, with what changed and a one-click undo.</p>
   const tally = (k: ChangeKind): number => changes.filter((c) => c.kind === k).length
@@ -414,14 +415,20 @@ function Changes({ messages }: { messages: ChatMessage[] }) {
                     className="h-7 px-2 text-[0.78rem]"
                     title="Put the file back the way it was before this change"
                     onClick={async () => {
-                      await api.project.revert(c.backup!, c.path)
-                      setReverted((s) => new Set(s).add(c.key))
+                      try {
+                        await api.project.revert(c.backup!, c.path)
+                        setReverted((s) => new Set(s).add(c.key))
+                        setFailed(({ [c.key]: _gone, ...rest }) => rest)
+                      } catch (e) {
+                        setFailed((f) => ({ ...f, [c.key]: String((e as Error)?.message ?? e).replace(/^Error invoking remote method '[^']+': (\w*Error: )?/, '') }))
+                      }
                     }}
                   >
                     <RotateCcw size={13} /> Undo
                   </Button>
                 )}
                 {reverted.has(c.key) && <span className="px-2 text-[0.76rem] text-ok">Undone</span>}
+                {failed[c.key] && <span className="min-w-0 truncate px-2 text-[0.76rem] text-danger" title={failed[c.key]}>Could not undo: {failed[c.key]}</span>}
               </div>
             </li>
           )

@@ -59,6 +59,9 @@ export function cancelDownload(id: string): boolean {
 
 export const isDownloading = (id: string): boolean => active.has(id)
 
+/** Ids of the downloads running now (model packs, engines). */
+export const activeDownloads = (): string[] => [...active.keys()]
+
 async function downloadOne(item: DownloadItem, signal: AbortSignal, onProgress: (received: number) => void): Promise<void> {
   await fs.mkdir(path.dirname(item.dest), { recursive: true })
   const part = `${item.dest}.part`

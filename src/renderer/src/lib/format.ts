@@ -39,6 +39,8 @@ export function timeAgo(ts: number): string {
 
 export function shortModel(name?: string): string {
   if (!name) return ''
+  // A model of an API service is named "@service/model": show the model's own id.
+  if (name[0] === '@' && name.includes('/')) return name.slice(name.indexOf('/') + 1).replace(/^models\//, '')
   return name
     .replace(/^hf\.co\/[^/]+\//, '')
     .replace(/-GGUF/i, '')
@@ -49,6 +51,7 @@ export function shortModel(name?: string): string {
 export function prettyModel(name?: string): string {
   if (!name) return ''
   const n = shortModel(name)
+  if (name[0] === '@') return n
   const [base, tag = ''] = n.split(':')
   const fam = base.replace(/^qwen/i, 'Qwen').replace(/-embedding/i, ' Embedding').replace(/^embeddinggemma/i, 'EmbeddingGemma')
   const size = /(\d+(\.\d+)?)b/i.exec(tag)?.[1]

@@ -5,6 +5,7 @@ import path from 'node:path'
 import { powerMonitor } from 'electron'
 import type { BusyLevel, GpuStatus, SystemStatus } from '@shared/types'
 import { ollama } from '../engines/ollama'
+import { isLite } from '../perf'
 import { settings } from '../settings'
 import { Emitter, log } from '../util'
 import { parseIoreg } from './posixParse'
@@ -27,8 +28,12 @@ class SystemMonitor {
   private timer?: NodeJS.Timeout
   private prevCpu = os.cpus()
   private extUtil = 0
+  /** Processor load from other programs: sampled only while Maris's own models are idle. */
+  private extCpu = 0
   private lastMediaAt = 0
   private ollamaVersion?: string
+  /** Whether Ollama is on this computer at all, looked at now and then (a file check). */
+  private ollamaInstalled?: { at: number; yes: boolean }
   private comfyProbe: () => Promise<ComfyProbe> = async () => ({
     up: false,
     installed: false,
@@ -99,6 +104,9 @@ class SystemMonitor {
 
   /** GPU readings without nvidia-smi: Windows performance counters, Linux sysfs or macOS IOKit. */
   private startFallback(intervalMs: number): void {
+    // On a slow computer without a graphics card for models there is nothing worth watching: skip the
+    // extra process that would sample it.
+    if (isLite()) return
     if (process.platform === 'win32') this.startCounters(intervalMs)
     else this.startPosixGpu(intervalMs)
   }
@@ -236,6 +244,8 @@ class SystemMonitor {
 
   private counters?: ChildProcess
   private counterGpu?: { name: string; totalMB: number }
+  /** How many times in a row typeperf ended at once (no GPU counters on this computer). */
+  private counterFails = 0
 
   /**
    * GPU load and VRAM from Windows performance counters via typeperf, for GPUs without nvidia-smi.
@@ -255,6 +265,8 @@ class SystemMonitor {
       const sec = String(Math.max(1, Math.round(intervalMs / 1000)))
       const p = spawn('typeperf', ['\\GPU Engine(*engtype_3D)\\Utilization Percentage', '\\GPU Adapter Memory(*)\\Dedicated Usage', '-si', sec], { windowsHide: true })
       this.counters = p
+      const startedAt = Date.now()
+      let gotRow = false
       let header: string[] | undefined
       let buf = ''
       const cells = (line: string): string[] => line.replace(/^"|"$/g, '').split('","')
@@ -270,6 +282,7 @@ class SystemMonitor {
             header = row
             continue
           }
+          gotRow = true
           let util = 0
           let usedBytes = 0
           row.forEach((v, i) => {
@@ -288,11 +301,24 @@ class SystemMonitor {
         }
       })
       const refresh = setTimeout(() => p.kill(), 60000)
-      p.on('error', () => clearTimeout(refresh))
+      p.on('error', () => {
+        clearTimeout(refresh)
+        this.counters = undefined
+      })
       p.on('exit', () => {
         clearTimeout(refresh)
         this.counters = undefined
-        if (!this.stopped) setTimeout(() => this.startCounters(intervalMs), 500)
+        if (this.stopped) return
+        // typeperf that ends within seconds without a reading has no GPU counters to read (an old
+        // driver, a virtual machine, a remote session). It used to be started again twice a second for
+        // ever, which an old computer feels; now it is tried more and more rarely, then not at all.
+        const failed = !gotRow && Date.now() - startedAt < 15000
+        this.counterFails = failed ? this.counterFails + 1 : 0
+        if (this.counterFails >= 5) {
+          log.info('monitor', 'this computer has no GPU counters to read; the status bar shows no live GPU load')
+          return
+        }
+        setTimeout(() => this.startCounters(intervalMs), failed ? Math.min(300000, 3000 * 2 ** this.counterFails) : 500)
       })
     } catch (e) {
       log.warn('monitor', 'GPU counters unavailable', e)
@@ -319,6 +345,7 @@ class SystemMonitor {
     const [loaded, comfy] = await Promise.all([ollama.ps(), this.comfyProbe().catch(() => undefined)])
     if (!this.ollamaVersion || loaded.length === 0) this.ollamaVersion = await ollama.version()
     const up = Boolean(this.ollamaVersion)
+    if (!this.ollamaInstalled || Date.now() - this.ollamaInstalled.at > 30000) this.ollamaInstalled = { at: Date.now(), yes: up || ollama.isInstalled() }
     const cpu = this.cpuLoad()
     const gpu = this.gpu
     const ourVramMB = loaded.reduce((s, m) => s + m.vramBytes, 0) / 2 ** 20 + (comfy?.vramMB ?? 0)
@@ -332,7 +359,10 @@ class SystemMonitor {
       this.extUtil = this.extUtil * 0.5 + gpu.utilization * 0.5
     }
     const extVram = gpu ? Math.max(0, gpu.memUsedMB - ourVramMB) : 0
-    const busy = this.level(this.extUtil, extVram, cpu)
+    // The same goes for the processor: a model answering on it uses every core, and Maris's own work
+    // is no reason to step down to a smaller model for the next message.
+    if (llmActive === 0 && mediaActive === 0 && !comfy?.busy && quiet) this.extCpu = this.extCpu * 0.5 + cpu * 0.5
+    const busy = this.level(this.extUtil, extVram, this.extCpu)
     let onBattery = false
     try {
       onBattery = powerMonitor.isOnBatteryPower()
@@ -346,7 +376,7 @@ class SystemMonitor {
       ramUsedMB: Math.round((os.totalmem() - os.freemem()) / 2 ** 20),
       ramTotalMB: Math.round(os.totalmem() / 2 ** 20),
       onBattery,
-      ollama: { up, version: this.ollamaVersion, loaded },
+      ollama: { up, version: this.ollamaVersion, loaded, installed: up || this.ollamaInstalled.yes },
       comfy: {
         up: comfy?.up ?? false,
         installed: comfy?.installed ?? false,
@@ -357,7 +387,8 @@ class SystemMonitor {
       },
       external: { gpuUtil: Math.round(this.extUtil), vramMB: Math.round(extVram) },
       busy,
-      activeJobs: { llm: llmActive, media: mediaActive }
+      activeJobs: { llm: llmActive, media: mediaActive },
+      lite: isLite()
     }
   }
 

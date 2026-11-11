@@ -183,6 +183,17 @@ export const API_CHANNELS = {
     reconnect: 'connectors:reconnect',
     onChange: 'connectors:changed'
   },
+  providers: {
+    list: 'providers:list',
+    presets: 'providers:presets',
+    add: 'providers:add',
+    edit: 'providers:edit',
+    remove: 'providers:remove',
+    setEnabled: 'providers:setEnabled',
+    setPicked: 'providers:setPicked',
+    refresh: 'providers:refresh',
+    onChange: 'providers:changed'
+  },
   link: {
     status: 'link:status',
     startPairing: 'link:startPairing',

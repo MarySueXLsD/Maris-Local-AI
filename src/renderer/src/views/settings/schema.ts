@@ -90,7 +90,16 @@ export const SECTIONS: { id: SectionId; title: string; description: string }[] =
   { id: 'data', title: 'Data and setup', description: 'Where models and creations live, backups of these settings, and the setup assistant.' }
 ]
 
-const CTX = [4096, 8192, 12288, 16384, 24576, 32768, 49152, 65536, 98304, 131072].map((n) => ({ value: n, label: `${n / 1024}K` }))
+// Context windows from 4K up to 2M tokens (a model never gets more than it can take). The same sizes
+// and names as src/shared/context.ts, written out here because this file has to load without imports
+// (tests/context.test.ts checks that the two agree).
+const ctxLabel = (n: number): string => {
+  const unit = n % 1024 === 0 ? 1024 : 1000
+  const round = (x: number): string => String(Math.round(x * 10) / 10)
+  return n / unit >= unit ? `${round(n / unit / unit)}M` : `${round(n / unit)}K`
+}
+const CTX = [4096, 8192, 12288, 16384, 24576, 32768, 49152, 65536, 98304, 131072, 196608, 262144, 393216, 524288, 1048576, 2097152].map((n) => ({ value: n, label: ctxLabel(n) }))
+const API_CTX = [16384, 32768, 65536, 131072, 200000, 400000, 1000000, 2000000].map((n) => ({ value: n, label: ctxLabel(n) }))
 
 const ROLES = [
   ['fast', 'Fast'],
@@ -195,8 +204,9 @@ export const SETTINGS_SCHEMA: SettingDef[] = [
   { path: 'routing.busyVramGB', section: 'routing', group: 'Stepping down', label: 'Other apps count as heavy VRAM use above', type: 'slider', min: 1, max: 32, step: 1, unit: 'GB', format: 'plain', keywords: 'game busy threshold memory' },
   { path: 'routing.contextByTier.fast', section: 'routing', group: 'Context windows', label: 'Fast', type: 'select', options: CTX, keywords: 'context num_ctx' },
   { path: 'routing.contextByTier.balanced', section: 'routing', group: 'Context windows', label: 'Balanced', type: 'select', options: CTX, keywords: 'context num_ctx' },
-  { path: 'routing.contextByTier.max', section: 'routing', group: 'Context windows', label: 'Max', type: 'select', options: CTX, keywords: 'context num_ctx' },
+  { path: 'routing.contextByTier.max', section: 'routing', group: 'Context windows', label: 'Max', hint: `Sizes go up to 2M tokens; a model never gets more than it takes, and a very large window needs a lot of memory on this ${DEVICE}. The context ring next to Send shows what each size costs here.`, type: 'select', options: CTX, keywords: 'context num_ctx million 1m 2m large big window' },
   { path: 'routing.contextByTier.tiny', section: 'routing', group: 'Context windows', label: 'Helper', type: 'select', options: CTX, keywords: 'context num_ctx' },
+  { path: 'routing.apiContext', section: 'routing', group: 'Context windows', label: 'Models at an API service', hint: 'How much of a long conversation is sent with each message before older messages are summarised, up to 2M tokens. A model never gets more than it takes. More keeps more in view and costs more per message, because a full window is sent again every time.', type: 'select', options: API_CTX, keywords: 'context api cloud claude gpt gemini tokens cost budget million 1m 2m large big window' },
   { path: 'routing.codeContext', section: 'routing', group: 'Context windows', label: 'Code mode', hint: 'Longer windows hold more files and steps but need more video memory; what does not fit runs from system memory, which is slower. The context ring next to Send shows what each size costs on this PC.', type: 'select', options: CTX, keywords: 'context num_ctx' },
 
   // ------------------------------------------------------------- generation
@@ -216,11 +226,25 @@ export const SETTINGS_SCHEMA: SettingDef[] = [
     ],
     keywords: 'offload hybrid processing'
   },
+  {
+    path: 'engine.profile',
+    section: 'engine',
+    label: 'Low-power mode',
+    hint: `For slow computers: short instructions, only the tools a request needs, no extra model calls and a lighter interface, so a small model answers as quickly as this ${DEVICE} allows. Auto turns it on when the hardware scan finds no usable graphics card and little memory or few cores. Models at an API service are never held back by it.`,
+    type: 'segmented',
+    options: [
+      { value: 'auto', label: 'Auto' },
+      { value: 'lite', label: 'On' },
+      { value: 'standard', label: 'Off' }
+    ],
+    keywords: 'slow old pc laptop cpu only performance lite weak speed faster low end light'
+  },
   { path: 'engine.keepAliveMin', section: 'engine', label: 'Keep models loaded for', hint: 'After the last use. 0 frees memory right away; follow-up questions then wait for a reload.', type: 'number', min: 0, max: 1440, step: 5, unit: 'min', keywords: 'keep_alive unload' },
   { path: 'engine.cpuThreads', section: 'engine', label: 'CPU threads', hint: '0 lets Ollama decide.', type: 'number', min: 0, max: 128, step: 1, keywords: 'num_thread cores' },
   { path: 'engine.gpuReserveMB', section: 'engine', label: 'VRAM to leave free', hint: `For ${OS_NAME}, your browser and games.`, type: 'number', min: 0, max: 16384, step: 50, unit: 'MB', keywords: 'reserve memory' },
   { path: 'engine.firstTokenTimeoutSec', section: 'engine', label: 'Wait for a model to start answering', hint: 'Large models can take minutes to load the first time.', type: 'number', min: 30, max: 1800, step: 10, unit: 's', keywords: 'timeout' },
   { path: 'engine.idleTimeoutSec', section: 'engine', label: 'Give up when a model goes silent for', type: 'number', min: 30, max: 1800, step: 10, unit: 's', keywords: 'timeout stall' },
+  { path: 'engine.stopOllamaOnQuit', section: 'engine', label: 'Stop Ollama when Maris closes', hint: 'Closing Maris always unloads its models, so no video memory stays in use. On: the Ollama server is stopped too (Maris starts it again next time). Off: Ollama keeps running for other programs.', type: 'switch', keywords: 'quit exit close vram video memory server background free' },
   { path: 'ollamaUrl', section: 'engine', label: 'Ollama address', hint: 'Change only if Ollama runs on another port or computer.', type: 'text', placeholder: 'http://127.0.0.1:11434', keywords: 'url host port server' },
 
   // ------------------------------------------------------------- access
@@ -295,7 +319,14 @@ export const SETTINGS_SCHEMA: SettingDef[] = [
   { path: 'system.monitorIntervalSec', section: 'status', label: 'Update every', type: 'number', min: 1, max: 30, step: 1, unit: 's', keywords: 'refresh interval' },
 
   // ------------------------------------------------------------- window
-  { path: 'ui.closeToTray', section: 'window', label: IS_MAC ? 'Keep running in the menu bar when closed' : 'Keep running in the tray when closed', type: 'switch' },
+  {
+    path: 'ui.closeToTray',
+    section: 'window',
+    label: IS_MAC ? 'Keep running in the menu bar when closed' : 'Keep running in the tray when closed',
+    hint: `Off: closing the window closes Maris completely and frees the graphics card's memory (it asks first if an answer, a picture or a download is still going). On: Maris stays in the ${IS_MAC ? 'menu bar' : 'tray'} for the shortcut, the phone app and the maris command, and lets go of video memory about a minute after its window closes.`,
+    type: 'switch',
+    keywords: 'quit exit close background vram memory tray minimize'
+  },
   { path: 'ui.launchAtLogin', section: 'window', label: `Start with ${OS_NAME}`, type: 'switch', keywords: 'autostart login' },
   { path: 'ui.hotkey', section: 'window', label: 'Shortcut to show Maris from anywhere', hint: 'Electron accelerator names, for example Control+Shift+Space or Alt+A.', type: 'hotkey', keywords: 'keyboard global' },
 

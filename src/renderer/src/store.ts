@@ -74,11 +74,13 @@ interface State {
   /** Chats with a finished answer the person has not looked at yet. */
   unread: Record<string, true>
   /** Which tab the Models page opens on. */
-  modelsTab: 'text' | 'image' | 'video'
+  modelsTab: 'text' | 'image' | 'video' | 'api'
   /** The setup assistant, opened from Settings (it also shows on first launch). */
   setupOpen: boolean
   /** Article shown on the Help page. */
   helpArticle?: string
+  /** Facts about this copy of Maris and the system it runs on. */
+  appInfo?: { version: string; material?: boolean }
 
   openHelp(article?: string): void
   openSetup(): void
@@ -88,7 +90,7 @@ interface State {
   insertIntoComposer(text: string, replace?: boolean): void
   attachToComposer(list: Attachment[]): void
   setComposerMedia(kind: ComposerKind, packId?: string): void
-  openModels(tab?: 'text' | 'image' | 'video'): void
+  openModels(tab?: 'text' | 'image' | 'video' | 'api'): void
   /** Make a picture or video in the open chat (or a new one). */
   sendMedia(req: MediaRequest, attachments: Attachment[]): Promise<void>
   setAutoEdits(on: boolean): void
@@ -280,6 +282,12 @@ export const useApp = create<State>((set, get) => {
       api.models.onPull((p) => {
         if (p.done && !p.error) void get().refreshModels(true)
       })
+      // An API service was added, changed or removed: the models on offer changed with it.
+      api.providers?.onChange(() => void get().refreshModels(true))
+      void api.app
+        .info()
+        .then((appInfo) => set({ appInfo }))
+        .catch(() => undefined)
       api.app.onCommand((cmd) => {
         if (cmd === 'new-chat') get().newChat()
         if (cmd === 'open-settings') get().setView('settings')

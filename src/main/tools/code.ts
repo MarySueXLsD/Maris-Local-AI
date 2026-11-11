@@ -14,38 +14,62 @@ import { needsAdmin } from './keys'
 import { runPosix, runPowerShell, runShell } from './shell'
 import { bool, num, schema, str, ToolError, type ToolDef } from './types'
 
-// Build output and dependency folders that are never worth searching.
-const CODE_SKIP = new Set([
+// Dependency and cache folders that are never worth searching, whatever the project.
+const ALWAYS_SKIP = new Set([
   ...SKIP_DIRS,
-  'bin',
-  'obj',
-  'target',
-  'dist',
-  'build',
-  'out',
   '.vs',
   '.idea',
-  '.vscode',
-  'export',
   '.haxelib',
   '.godot',
-  'library',
   '.gradle',
-  'packages',
   '.next',
+  '.nuxt',
+  '.svelte-kit',
+  '.turbo',
+  '.parcel-cache',
   'coverage',
   '.mypy_cache',
   '.pytest_cache',
+  '.ruff_cache',
   '.tox',
+  'bower_components',
   'cmake-build-debug',
-  'cmake-build-release',
-  'x64',
-  'debug',
-  'release'
+  'cmake-build-release'
 ])
 
-function globToRegex(glob: string): RegExp {
+/**
+ * Build output of one kind of project, skipped only next to the files that mark that kind. The same
+ * name means different things in different projects: "bin" beside a .csproj is build output, in a Node
+ * project it holds the command-line scripts; "packages" beside a .sln is NuGet's cache, in a JavaScript
+ * monorepo it is where all the code lives. (Skipping these by name alone hid whole projects from
+ * project_tree and grep.) What a project's own .gitignore lists is skipped as well.
+ */
+const OUTPUT_DIRS: [name: string, beside: RegExp][] = [
+  ['bin', /\.(csproj|fsproj|vbproj|sln|slnx)$/i],
+  ['obj', /\.(csproj|fsproj|vbproj|vcxproj|sln|slnx)$/i],
+  ['packages', /^(packages\.config|nuget\.config)$|\.sln$/i],
+  ['target', /^(cargo\.toml|pom\.xml)$/i],
+  ['export', /^project\.xml$|\.hxml$/i],
+  ['library', /^projectsettings$/i],
+  ['temp', /^projectsettings$/i],
+  ['dist', /^(package\.json|pyproject\.toml|setup\.py)$/i],
+  ['build', /^(package\.json|cmakelists\.txt|build\.gradle(\.kts)?|pyproject\.toml|setup\.py|meson\.build)$/i],
+  ['out', /^(package\.json|tsconfig\.json|cmakelists\.txt)$/i],
+  ['x64', /\.(vcxproj|sln)$/i],
+  ['debug', /\.(vcxproj|sln)$|^cmakelists\.txt$/i],
+  ['release', /\.(vcxproj|sln)$|^cmakelists\.txt$/i]
+]
+
+/** Whether a folder is left out of code searches. `siblings`: the names next to it. */
+export function skipCodeDir(name: string, siblings: string[]): boolean {
+  const lower = name.toLowerCase()
+  if (ALWAYS_SKIP.has(lower) || (name.startsWith('.') && name !== '.github')) return true
+  return OUTPUT_DIRS.some(([n, beside]) => n === lower && siblings.some((s) => beside.test(s)))
+}
+
+export function globToRegex(glob: string): RegExp {
   let re = ''
+  let braces = 0
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i]
     if (c === '*') {
@@ -55,14 +79,34 @@ function globToRegex(glob: string): RegExp {
         if (glob[i + 1] === '/' || glob[i + 1] === '\\') i++
       } else re += '[^\\\\/]*'
     } else if (c === '?') re += '[^\\\\/]'
-    else if (c === '{') re += '('
-    else if (c === '}') re += ')'
-    else if (c === ',') re += '|'
+    else if (c === '{') {
+      braces++
+      re += '('
+    } else if (c === '}' && braces > 0) {
+      braces--
+      re += ')'
+    }
+    // A comma separates alternatives only inside braces: "*.{ts,tsx}". Elsewhere it is a comma.
+    else if (c === ',') re += braces > 0 ? '|' : ','
     else if (c === '/' || c === '\\') re += '[\\\\/]'
-    else if ('.+^$()|[]'.includes(c)) re += '\\' + c
+    else if ('.+^$()|[]{}'.includes(c)) re += '\\' + c
     else re += c
   }
-  return new RegExp(`^${re}$`, 'i')
+  return new RegExp(`^${re}${')'.repeat(braces)}$`, 'i')
+}
+
+/** A list argument: models sometimes send it as a JSON string instead of a list. */
+function asList(v: unknown): unknown[] | undefined {
+  if (Array.isArray(v)) return v
+  if (typeof v === 'string') {
+    try {
+      const parsed = JSON.parse(v) as unknown
+      return Array.isArray(parsed) ? parsed : undefined
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
 }
 
 /** Very small .gitignore support: name/glob patterns and folder patterns at the root. */
@@ -98,11 +142,12 @@ async function* walkFiles(root: string, limit = 20000): AsyncGenerator<string> {
     } catch {
       continue
     }
+    const names = entries.map((e) => e.name)
     for (const e of entries) {
       const full = path.join(dir, e.name)
       const rel = path.relative(root, full)
       if (e.isDirectory()) {
-        if (CODE_SKIP.has(e.name.toLowerCase()) || e.name.startsWith('.') && e.name !== '.github') continue
+        if (skipCodeDir(e.name, names)) continue
         if (ignored?.(rel, true)) continue
         queue.push(full)
       } else if (e.isFile()) {
@@ -205,8 +250,9 @@ export const codeTools: ToolDef[] = [
         } catch {
           return
         }
+        const names = entries.map((e) => e.name)
         entries = entries
-          .filter((e) => !(e.isDirectory() && (CODE_SKIP.has(e.name.toLowerCase()) || (e.name.startsWith('.') && e.name !== '.github'))))
+          .filter((e) => !(e.isDirectory() && skipCodeDir(e.name, names)))
           .filter((e) => !ignored?.(path.relative(root, path.join(dir, e.name)), e.isDirectory()))
           .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))
         const shown = entries.slice(0, 60)
@@ -317,7 +363,7 @@ export const codeTools: ToolDef[] = [
       const p = resolvePath(str(args.path, 'path'), ctx.cwd)
       const { text } = await readTextFile(p)
       const next = applyAll(text, args.edits)
-      return { risk: riskFor(p), title: `Edit ${p} (${(args.edits as unknown[]).length} changes)`, detail: systemNote(p), preview: makeDiff(p, text, next, false), targets: [p] }
+      return { risk: riskFor(p), title: `Edit ${p} (${asList(args.edits)?.length ?? 0} changes)`, detail: systemNote(p), preview: makeDiff(p, text, next, false), targets: [p] }
     },
     async run(args, ctx) {
       const p = resolvePath(str(args.path, 'path'), ctx.cwd)
@@ -326,7 +372,7 @@ export const codeTools: ToolDef[] = [
       const bak = await backup(p)
       if (bak) ctx.reportBackup(bak)
       await fs.writeFile(p, encodeLike(raw, next))
-      return `Applied ${(args.edits as unknown[]).length} edit(s) to ${p}`
+      return `Applied ${asList(args.edits)?.length ?? 0} edit(s) to ${p}${bak ? ` (backup: ${bak})` : ''}`
     }
   },
   {
@@ -341,10 +387,10 @@ export const codeTools: ToolDef[] = [
       const p = resolvePath(str(args.path, 'path'), ctx.cwd)
       if (!existsSync(p)) throw new ToolError(`Image not found: ${p}`)
       let img = nativeImage.createFromPath(p)
-      if (img.isEmpty()) throw new ToolError('Not an image Windows can read (try PNG or JPEG)')
+      if (img.isEmpty()) throw new ToolError('Not a picture this computer can read (PNG and JPEG always work).')
       const { width, height } = img.getSize()
       ctx.setPreview(`data:image/jpeg;base64,${img.resize({ width: Math.min(480, width) }).toJPEG(70).toString('base64')}`)
-      if (!ctx.modelSupportsVision) return `Image ${width}x${height}. The current model cannot see images; switch to a vision model (Qwen3.5/3.8 can).`
+      if (!ctx.modelSupportsVision) return `Image ${width}x${height}. The current model cannot see pictures. Tell the user to pick a model that can (Models lists which ones "see images").`
       const scale = Math.min(1, 1280 / Math.max(width, height))
       if (scale < 1) img = img.resize({ width: Math.round(width * scale), height: Math.round(height * scale), quality: 'best' })
       ctx.attachImageForModel(img.toJPEG(85).toString('base64'), `Image ${path.basename(p)} (${width}x${height})`)
@@ -450,7 +496,7 @@ export const codeTools: ToolDef[] = [
       return { risk: 'read', title: 'Plan' }
     },
     async run(args) {
-      const steps = Array.isArray(args.steps) ? (args.steps as { text: string; status: string }[]) : []
+      const steps = (asList(args.steps) ?? []) as { text: string; status: string }[]
       const done = steps.filter((s) => s.status === 'done').length
       return `Plan updated: ${done}/${steps.length} done.`
     }
@@ -512,8 +558,9 @@ export const codeTools: ToolDef[] = [
   }
 ]
 
-function applyAll(text: string, edits: unknown): string {
-  if (!Array.isArray(edits) || !edits.length) throw new ToolError('edits must be a non-empty list')
+function applyAll(text: string, given: unknown): string {
+  const edits = asList(given)
+  if (!edits?.length) throw new ToolError('edits must be a non-empty list of { old_text, new_text } objects')
   let out = text
   edits.forEach((e, i) => {
     const ed = e as { old_text?: string; new_text?: string; replace_all?: boolean }

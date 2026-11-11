@@ -26,8 +26,24 @@ export function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v))
 }
 
-/** Rough token estimate (Qwen tokenizer averages ~3.6 chars per token for mixed text). */
-export const estimateTokens = (text: string): number => Math.ceil(text.length / 3.6)
+/**
+ * Rough token estimate. English text and code average about 3.6 characters per token; Cyrillic, Greek,
+ * Arabic and accented text about 2.3; Chinese, Japanese and Korean about 1.4. Counting everything as
+ * English made a Russian or Chinese chat look half as long as it is, and it then overflowed the
+ * context window (Ollama drops the beginning of the prompt without saying so).
+ */
+export function estimateTokens(text: string): number {
+  let ascii = 0
+  let other = 0
+  let wide = 0
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i)
+    if (c < 0x80) ascii++
+    else if (c >= 0x2e80) wide++
+    else other++
+  }
+  return Math.ceil(ascii / 3.6 + other / 2.3 + wide / 1.4)
+}
 
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'

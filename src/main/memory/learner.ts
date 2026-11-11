@@ -1,3 +1,4 @@
+import { isLite } from '../perf'
 import type { ChatMessage, MemoryKind } from '@shared/types'
 import { messageText, repo } from '../db'
 import { ollama } from '../engines/ollama'
@@ -64,7 +65,9 @@ class Learner {
   private running = false
 
   /** Debounced: learn from a conversation once it has been quiet for a while. */
-  schedule(conversationId: string, delayMs = Math.max(5, settings.get().memory.learnAfterSec) * 1000): void {
+  // On a slow computer learning waits four times as long: there the one model is better left free for
+  // the next message than busy reading the last chat (a message that does arrive stops it anyway).
+  schedule(conversationId: string, delayMs = Math.max(5, settings.get().memory.learnAfterSec) * 1000 * (isLite() ? 4 : 1)): void {
     if (!settings.get().memory.enabled || !settings.get().memory.autoLearn) return
     clearTimeout(this.timers.get(conversationId))
     this.timers.set(

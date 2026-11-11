@@ -151,6 +151,21 @@ export const GLOSSARY: Record<string, GlossaryEntry> = {
     short: 'A link to another service, such as GitHub or Notion, through the Model Context Protocol. It gives Maris tools for that service; tools that change something ask first.',
     article: 'connectors'
   },
+  apikey: {
+    term: 'API key',
+    short: 'A long password that lets a program use your account with a service such as Claude or GPT. Maris stores it encrypted and sends it only to its own service.',
+    article: 'api-models'
+  },
+  apimodel: {
+    term: 'API model',
+    short: `A model that runs at a service on the internet instead of on your ${DEVICE}. Chats with it are sent to that service, which bills your account.`,
+    article: 'api-models'
+  },
+  lowpower: {
+    term: 'Low-power mode',
+    short: `How Maris works on a slow ${DEVICE}: short instructions, only the tools a request needs and a plain window, so a small model answers as quickly as it can.`,
+    article: 'slow-pc'
+  },
   processing: {
     term: 'GPU only, GPU + CPU, CPU only',
     short: 'Where models are allowed to run. GPU only is fastest; GPU + CPU allows bigger models that spill into RAM; CPU only needs no graphics card.',

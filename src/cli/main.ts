@@ -158,6 +158,9 @@ function openFile(file: string): void {
   spawn(cmd as string, args as string[], { detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: process.platform === 'win32' }).unref()
 }
 
+/** What to call a model: the name its service gives it, or the readable form of an Ollama tag. */
+const nameOf = (m: ModelInfo): string => m.label ?? prettyModel(m.name)
+
 async function resolveModel(rpc: Rpc, want: string): Promise<string> {
   const w = want.trim().toLowerCase()
   if (!w || w === 'auto') return 'auto'
@@ -168,12 +171,15 @@ async function resolveModel(rpc: Rpc, want: string): Promise<string> {
     return name
   }
   const models = await rpc.call<ModelInfo[]>('models:list')
+  const squeezed = (t: string): string => t.toLowerCase().replace(/\s+/g, '')
   const hit =
     models.find((m) => m.name.toLowerCase() === w) ??
-    models.find((m) => prettyModel(m.name).toLowerCase() === w) ??
+    models.find((m) => nameOf(m).toLowerCase() === w) ??
     models.find((m) => m.name.toLowerCase().startsWith(w)) ??
-    models.find((m) => prettyModel(m.name).toLowerCase().replace(/\s+/g, '').includes(w.replace(/\s+/g, '')))
-  if (!hit) throw new Usage(`No installed model matches "${want}". See maris models.`)
+    models.find((m) => squeezed(nameOf(m)).includes(squeezed(w))) ??
+    // "claude-…" also finds "@anthropic/claude-…".
+    models.find((m) => m.provider && squeezed(m.name).includes(squeezed(w)))
+  if (!hit) throw new Usage(`No model matches "${want}". See maris models.`)
   return hit.name
 }
 
@@ -284,7 +290,16 @@ async function status(rpc: Rpc): Promise<number> {
     const g = st.gpu
     row('Graphics', [g.name, `${g.utilization}%`, `${(g.memUsedMB / 1024).toFixed(1)} of ${(g.memTotalMB / 1024).toFixed(1)} GB`, g.temperatureC ? `${g.temperatureC}°C` : '', g.powerW ? `${Math.round(g.powerW)} W` : ''].filter(Boolean).join(` ${s.dot} `))
   }
-  row('Models', st.ollama.up ? st.ollama.loaded.map((l) => `${prettyModel(l.name)}${l.vramBytes < l.sizeBytes * 0.5 ? p.dim(' (processor)') : ''}`).join(', ') || p.dim('none loaded') : p.bad('Ollama is not running'))
+  const apiModels = st.ollama.up ? 0 : (await rpc.call<ModelInfo[]>('models:list').catch(() => [] as ModelInfo[])).filter((m) => m.provider).length
+  row(
+    'Models',
+    st.ollama.up
+      ? st.ollama.loaded.map((l) => `${prettyModel(l.name)}${l.vramBytes < l.sizeBytes * 0.5 ? p.dim(' (processor)') : ''}`).join(', ') || p.dim('none loaded')
+      : apiModels
+        ? `${apiModels} API model${apiModels === 1 ? '' : 's'} ${p.dim('(Ollama is not running)')}`
+        : p.bad('Ollama is not running')
+  )
+  if (st.lite) row('Mode', 'low-power')
   row('Pictures', !st.comfy.installed ? p.dim('not set up (Studio in the app)') : st.comfy.busy ? `drawing${st.comfy.queue ? `, ${st.comfy.queue} waiting` : ''}` : st.comfy.up ? 'ready' : p.dim('starts when needed'))
   row('Load', st.busy === 'heavy' ? p.gold('heavy: answers use smaller models') : st.busy === 'busy' ? p.gold('busy') : st.busy)
   return 0
@@ -301,13 +316,27 @@ async function models(rpc: Rpc): Promise<number> {
       cfg.tiers.tiny === name && 'Helper',
       cfg.tiers.embed === name && 'Memory'
     ].filter(Boolean) as string[]
-  say(`${M}${p.bold('Installed models')}`)
-  for (const mdl of list.slice().sort((a, b) => b.sizeBytes - a.sizeBytes)) {
+  const line = (mdl: ModelInfo, size: string): void => {
     const r = roles(mdl.name).join(', ')
     const caps = mdl.capabilities.filter((c) => c === 'tools' || c === 'vision' || c === 'thinking')
     const role = (r || '-').padEnd(18)
-    say(`${M}${prettyModel(mdl.name).padEnd(22)} ${p.dim(bytes(mdl.sizeBytes).padStart(8))}  ${r ? p.accent(role) : p.dim(role)} ${p.dim(caps.join(` ${s.dot} `))}`)
+    say(`${M}${nameOf(mdl).slice(0, 30).padEnd(30)} ${p.dim(size.padStart(8))}  ${r ? p.accent(role) : p.dim(role)} ${p.dim(caps.join(` ${s.dot} `))}`)
   }
+  const local = list.filter((m) => !m.provider)
+  if (local.length) {
+    say(`${M}${p.bold('Installed models')}`)
+    for (const mdl of local.slice().sort((a, b) => b.sizeBytes - a.sizeBytes)) line(mdl, bytes(mdl.sizeBytes))
+  }
+  // Models of the API services added in Models → API, under each service's name.
+  let printed = local.length > 0
+  for (const id of [...new Set(list.filter((m) => m.provider).map((m) => m.provider!))]) {
+    const theirs = list.filter((m) => m.provider === id)
+    if (printed) say('')
+    printed = true
+    say(`${M}${p.bold(theirs[0]!.providerName ?? id)} ${p.dim(theirs[0]!.remote === false ? '(on this computer)' : '(chats are sent there)')}`)
+    for (const mdl of theirs) line(mdl, 'API')
+  }
+  if (!list.length) say(`${M}${p.dim('No models yet. Open Maris → Models to download one or add an API key.')}`)
   say('')
   say(`${M}${p.dim('Pick one for a chat with -m fast|balanced|max or a name, for example: maris -m max "…"')}`)
   return 0

@@ -80,7 +80,10 @@ ${command}`
 
   output(id: string, tail = 80): string {
     const p = procs.get(id)
-    if (!p) return `No process with id ${id}. Use list_processes_started to see them.`
+    if (!p) {
+      const known = [...procs.values()].map((x) => `${x.id} (${x.name}${x.running ? '' : ', ended'})`)
+      return `No process with id ${id}. ${known.length ? `Processes Maris started: ${known.join(', ')}.` : 'Maris has not started any process yet (use start_process).'}`
+    }
     const lines = p.lines.slice(-Math.max(1, Math.min(1000, tail)))
     const state = p.running ? `running for ${Math.round((Date.now() - p.startedAt) / 1000)}s` : `exited with code ${p.exitCode ?? '?'}`
     return `[${p.id}] ${p.name} (${state}, pid ${p.pid ?? '?'}) in ${p.cwd}\n${lines.join('\n') || '(no output yet)'}`

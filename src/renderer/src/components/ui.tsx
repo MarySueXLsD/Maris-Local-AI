@@ -35,11 +35,23 @@ export const Button = forwardRef<HTMLButtonElement, BtnProps>(function Button(
 export function Tip({ label, children, side = 'top' }: { label: ReactNode; children: ReactNode; side?: 'top' | 'bottom' | 'left' | 'right' }) {
   return (
     <RTooltip.Root delayDuration={350}>
-      <RTooltip.Trigger asChild>{children}</RTooltip.Trigger>
+      <RTooltip.Trigger
+        asChild
+        // Focus that a dialog puts on its first button is not someone reaching for that button: no
+        // tooltip then. (Tabbing to a control still shows it.)
+        onFocus={(e) => {
+          if (!e.currentTarget.matches(':focus-visible')) e.preventDefault()
+        }}
+      >
+        {children}
+      </RTooltip.Trigger>
       <RTooltip.Portal>
         <RTooltip.Content
           side={side}
           sideOffset={6}
+          // Escape closes the tooltip and then reaches what is underneath (a dialog, a menu), so one
+          // press closes that too instead of only the tooltip.
+          onEscapeKeyDown={() => requestAnimationFrame(() => requestAnimationFrame(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))))}
           className="z-50 max-w-80 rounded-md border border-line bg-raised px-2.5 py-1.5 text-[0.8rem] leading-snug text-text shadow-float"
         >
           {label}

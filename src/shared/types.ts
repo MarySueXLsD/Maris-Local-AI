@@ -25,6 +25,13 @@ export interface ModelInfo {
   capabilities: string[] // completion | tools | thinking | vision | embedding
   contextLength?: number
   modifiedAt?: string
+  /** A readable name, for models whose id is not one (a service's models). */
+  label?: string
+  /** Set for models of a service the person added (Claude, an OpenAI-compatible one): its id and name. */
+  provider?: string
+  providerName?: string
+  /** What is sent to this model leaves the computer (false for services on this computer or home network). */
+  remote?: boolean
 }
 
 export interface LoadedModel {
@@ -56,6 +63,8 @@ export interface CatalogModel {
   coding?: number
   /** Roles this model is a sensible choice for. */
   roles?: LlmRole[]
+  /** A small or older model meant for slow computers (shown under its own heading). */
+  light?: boolean
   /** Only offered on GPUs with at least this much VRAM (custom quantisations sized for one card class). */
   minVramGB?: number
   maxVramGB?: number
@@ -105,7 +114,7 @@ export interface SystemStatus {
   ramUsedMB: number
   ramTotalMB: number
   onBattery: boolean
-  ollama: { up: boolean; version?: string; loaded: LoadedModel[] }
+  ollama: { up: boolean; version?: string; loaded: LoadedModel[]; /** Ollama is on this computer at all (it may be absent when only API models are used). */ installed?: boolean }
   comfy: {
     up: boolean
     installed: boolean
@@ -119,6 +128,8 @@ export interface SystemStatus {
   external: { gpuUtil: number; vramMB: number }
   busy: BusyLevel
   activeJobs: { llm: number; media: number }
+  /** Low-power mode is in effect (a slow computer, or the person turned it on). */
+  lite?: boolean
 }
 
 /** A program using video memory, as the status bar's VRAM details list it. */
@@ -161,6 +172,9 @@ export interface RouteDecision {
   auto: boolean
   category: TaskCategory
   complexity: number // 0..1
+  /** The model belongs to a service the person added: its name, and whether the chat leaves this computer. */
+  provider?: string
+  remote?: boolean
 }
 
 // ---------------------------------------------------------------- chat
@@ -228,10 +242,16 @@ export interface ContextSizes {
 
 export interface ContextSizeOption {
   tokens: number
-  /** gpu: fits in video memory; spill: part runs from system memory; cpu: everything runs on the processor. */
-  fit: 'gpu' | 'spill' | 'cpu'
+  /**
+   * gpu: fits in video memory; spill: part runs from system memory; cpu: everything runs on the
+   * processor; api: the model runs at an API service, where a bigger size means more is sent each time;
+   * none: model and window together need more memory than this computer has.
+   */
+  fit: 'gpu' | 'spill' | 'cpu' | 'api' | 'none'
   /** How much would run from system memory (MB). */
   spillMB?: number
+  /** Memory the model and this window need together (MB), where that is the problem. */
+  needMB?: number
   /** Rough slowdown of writing compared with fitting in video memory (2 = half as fast). */
   slower?: number
 }
@@ -327,6 +347,14 @@ export interface ChatMessage {
   createdAt: number
   /** A message from the composer's Image or Video mode: what to make. */
   media?: MediaRequest
+  /**
+   * For your messages: what Maris told the model along with it (the time, memories that fit, the
+   * project's state). Kept with the message and sent again unchanged, so a model on a slow computer
+   * only has to read what is new instead of the whole chat again.
+   */
+  context?: string
+  /** Memories already given to the model in this chat (ids), so each is told once. */
+  contextMemories?: string[]
   /** While an answer is live: what the model is doing right now (loading, reading, thinking). Not saved. */
   activity?: MessageActivity
 }
@@ -656,6 +684,8 @@ export interface PcScan {
   platform?: OsPlatform
   os: string
   cpu: { name: string; cores: number; threads: number; avx2: boolean; avx512: boolean }
+  /** A slow computer (no usable graphics card and little memory or few cores): low-power mode suits it. */
+  lite?: boolean
   ram: { totalMB: number; freeMB: number; speedMTs?: number; type?: string; bandwidthGBs: number }
   gpus: GpuInfo[]
   /** The GPU Maris uses (largest dedicated one). */
@@ -766,8 +796,15 @@ export interface Settings {
   engine: {
     /** Chosen in setup: keep models on the GPU, let them overflow into RAM, or use the CPU only. */
     processing: Processing
+    /**
+     * Low-power mode for slow computers: short instructions, only the tools a request needs, one model
+     * for everything and a lighter interface. Auto turns it on where it helps.
+     */
+    profile: 'auto' | 'standard' | 'lite'
     /** Minutes a model stays loaded after its last use. */
     keepAliveMin: number
+    /** Closing Maris also stops the Ollama server (its models are unloaded either way). */
+    stopOllamaOnQuit: boolean
     /** CPU threads for language models (0 = let Ollama decide). */
     cpuThreads: number
     /** VRAM left free for Windows and other programs, in MB. */
@@ -782,6 +819,8 @@ export interface Settings {
     allowCpuFallback: boolean
     contextByTier: Record<Tier, number>
     codeContext: number // context window for Code mode
+    /** How much of a conversation is sent to models of an API service before older messages are summarised (tokens). */
+    apiContext: number
     stepDownOnBattery: boolean
     preferLoaded: boolean
     learnFromFeedback: boolean

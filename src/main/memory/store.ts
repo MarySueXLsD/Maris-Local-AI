@@ -170,10 +170,14 @@ class MemoryStore {
       .map(({ m, score }) => ({ memory: this.get(m.id)!, score }))
   }
 
-  /** Build the memory section of the system prompt for one user message. */
-  async promptBlock(query: string): Promise<{ block: string; ids: string[] }> {
+  /**
+   * The memories to tell the model along with one user message: pinned ones and standing instructions,
+   * then those that fit the message. `told` are memories this chat already gave the model, which are not
+   * repeated (they are still in the conversation it reads).
+   */
+  async forPrompt(query: string, told: Set<string> = new Set()): Promise<Memory[]> {
     const cfg = settings.get().memory
-    if (!cfg.enabled || !this.items.length) return { block: '', ids: [] }
+    if (!cfg.enabled || !this.items.length || cfg.maxInPrompt <= 0) return []
     const chosen = new Map<string, Memory>()
     for (const m of this.items) {
       if (m.pinned || ((m.kind === 'instruction' || m.kind === 'preference') && m.importance >= 0.8)) chosen.set(m.id, m)
@@ -183,14 +187,9 @@ class MemoryStore {
       if (chosen.size >= cfg.maxInPrompt) break
       chosen.set(r.memory.id, r.memory)
     }
-    if (!chosen.size) return { block: '', ids: [] }
-    const ids = [...chosen.keys()]
-    repo.touchMemories(ids, Date.now())
-    const lines = [...chosen.values()].map((m) => `- (${m.kind}) ${m.text}`)
-    return {
-      block: `## What you remember about the user\nUse these naturally when relevant; never recite the list.\n${lines.join('\n')}`,
-      ids
-    }
+    const fresh = [...chosen.values()].filter((m) => !told.has(m.id)).map(({ embedding: _e, embedModel: _m, ...m }: Stored) => m)
+    if (fresh.length) repo.touchMemories(fresh.map((m) => m.id), Date.now())
+    return fresh
   }
 
   /** Re-embed memories after the embedding model changes. */

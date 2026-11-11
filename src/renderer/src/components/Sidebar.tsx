@@ -148,7 +148,7 @@ const NAV: { view: View; label: string; icon: typeof Brain; tip: string }[] = [
   { view: 'skills', label: 'Skills', icon: Puzzle, tip: 'Instructions from git that teach Maris new kinds of tasks' },
   { view: 'connectors', label: 'Connectors', icon: Plug, tip: 'Connect GitHub, Notion, Home Assistant and other services' },
   { view: 'memory', label: 'Memory', icon: Brain, tip: 'What Maris remembers about you; edit or delete anything' },
-  { view: 'models', label: 'Models', icon: Boxes, tip: `The AI models on this ${DEVICE} for text, pictures and video: which does what, download more` },
+  { view: 'models', label: 'Models', icon: Boxes, tip: `The AI models for text, pictures and video: the ones on this ${DEVICE} and, if you like, Claude, GPT and others through an API key` },
   { view: 'settings', label: 'Settings', icon: Settings, tip: `Themes, behaviour and everything else (${keys(',')})` },
   { view: 'news', label: 'Updates & news', icon: Newspaper, tip: 'New versions of Maris and posts from its maker' },
   { view: 'help', label: 'Help', icon: LifeBuoy, tip: 'Guides and answers in plain language (F1)' }

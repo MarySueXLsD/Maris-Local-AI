@@ -1,7 +1,7 @@
 {
   "name": "maris",
   "productName": "Maris",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Maris — a private, local AI assistant for Windows, macOS, Linux and Android: chat, computer agent with approvals, memory, web browsing, and image/video generation.",
   "main": "./out/main/index.js",
   "author": "MarySue",
@@ -40,6 +40,7 @@
     "turndown": "^7.2.0"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
     "@capacitor/app": "^8.1.2",
     "@capacitor/core": "^8.6.0",
     "@modelcontextprotocol/sdk": "^1.32.2",

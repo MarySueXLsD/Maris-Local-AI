@@ -468,6 +468,7 @@ function AboutProject({ p, tasks, onClose }: { p: Project; tasks: number; onClos
 function RemoveProject({ p, tasks, onClose }: { p: Project; tasks: Conversation[]; onClose: () => void }) {
   const loadProjects = useApp((s) => s.loadProjects)
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>
@@ -478,6 +479,7 @@ function RemoveProject({ p, tasks, onClose }: { p: Project; tasks: Conversation[
             {tasks.length ? `Its ${tasks.length} task${tasks.length === 1 ? '' : 's'} in Maris are deleted too. ` : ''}The folder and every file in it stay as they are; you can add it again
             any time.
           </Dialog.Description>
+          {error && <p className="mt-3 rounded-lg bg-danger-soft px-3 py-2 text-[0.84rem] text-danger">{error}</p>}
           <div className="mt-5 flex justify-end gap-2">
             <Dialog.Close asChild>
               <Button variant="ghost">Keep it</Button>
@@ -487,12 +489,20 @@ function RemoveProject({ p, tasks, onClose }: { p: Project; tasks: Conversation[
               disabled={busy}
               onClick={() => {
                 setBusy(true)
+                setError(undefined)
                 void (async () => {
-                  for (const c of tasks) await api.conv.remove(c.id)
-                  await api.project.remove(p.path)
-                  await loadProjects()
-                  if (useApp.getState().project?.path === p.path) useApp.setState({ project: useApp.getState().projects[0] })
-                  onClose()
+                  try {
+                    for (const c of tasks) await api.conv.remove(c.id)
+                    await api.project.remove(p.path)
+                    await loadProjects()
+                    const open = useApp.getState().project
+                    if (open && keyOf(open.path) === keyOf(p.path)) useApp.setState({ project: useApp.getState().projects[0] })
+                    onClose()
+                  } catch (e) {
+                    // Without this the dialog would stay greyed out with no way on.
+                    setError(`Could not remove it: ${String((e as Error)?.message ?? e).replace(/^Error invoking remote method '[^']+': (\w*Error: )?/, '')}`)
+                    setBusy(false)
+                  }
                 })()
               }}
             >

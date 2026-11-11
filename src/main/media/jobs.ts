@@ -203,6 +203,13 @@ class MediaJobs {
     return mine.length
   }
 
+  /** Stop every picture and video that is being made or waiting (Maris is closing). */
+  cancelAll(): number {
+    const live = this.jobs.filter((j) => j.status === 'queued' || j.status === 'preparing' || j.status === 'running')
+    for (const j of live) this.cancel(j.id)
+    return live.length
+  }
+
   private update(job: MediaJob, patch: Partial<MediaJob>): void {
     Object.assign(job, patch)
     this.changed.emit({ ...job })

@@ -26,7 +26,7 @@ export const ARTICLES: Article[] = [
     category: 'Getting started',
     summary: 'What Maris is, what it can do, and how to start.',
     keywords: 'start introduction overview what is',
-    body: `Maris is an AI assistant that runs **entirely on your own ${DEVICE}**. Your conversations, files and pictures never leave it, unless you ask Maris to search the web.
+    body: `Maris is an AI assistant that runs **on your own ${DEVICE}**. Your conversations, files and pictures stay on it, unless you ask Maris to search the web or choose to answer with a model at an API service (see [Claude, GPT and other API models](help:api-models)).
 
 ## What you can do
 
@@ -160,7 +160,43 @@ When you use **Try again → with Max** or rate answers, Maris learns which mode
 
 ## Choosing yourself
 
-Open the model menu at the top of a chat and pick a model. That chat then always uses it.`
+Open the model menu at the top of a chat and pick a model. That chat then always uses it.
+
+## API models and Auto
+
+A model you added through an API key (Claude, GPT and others) is used by Auto only when you **give it a role** on Models → Text → Roles, or when no model is installed on this ${DEVICE} at all. A chat that goes to such a model is marked with a small cloud. See [Claude, GPT and other API models](help:api-models).
+
+## One model for everything
+
+On a slow ${DEVICE} the setup assistant gives every role the same small model, so nothing has to be loaded in between. Auto then simply answers with that model. See [Maris on a slow or old computer](help:slow-pc).`
+  },
+  {
+    id: 'closing',
+    title: 'Closing Maris',
+    category: 'Using Maris',
+    summary: 'What happens when you close the window, and how to keep Maris in the tray instead.',
+    keywords: 'close quit exit tray background vram memory ollama stop server shut down hotkey',
+    body: `## Closing the window closes Maris
+
+When you close the window, Maris closes **completely**:
+
+- answers and pictures that are still being made are stopped;
+- its models are taken out of memory, so the graphics card is free again;
+- the **Ollama** server is stopped as well, and so is the picture engine if Maris started it.
+
+The next time you open Maris, it starts what it needs again. The first answer then takes a little longer, because the model has to load.
+
+## If something is still going on
+
+If an answer is being written, a picture or video is being made, or a download is running, Maris **asks first**. **Keep Maris open** lets it finish; **Close anyway** stops it. What was written so far stays in the chat.
+
+## Keeping Maris in the tray
+
+Turn on **Settings → Window and startup → Keep running in the ${IS_MAC ? 'menu bar' : 'tray'} when closed**. Closing the window then only hides it: Maris stays in the ${IS_MAC ? 'menu bar' : 'tray'}, and **${accelLabel('Control+Shift+Space')}** brings it back from anywhere. After about a minute without work it still gives the graphics card’s memory back; models load again when you need them. **Quit Maris** in the ${IS_MAC ? 'menu bar' : 'tray'} menu closes it completely.
+
+## Leaving Ollama running
+
+If you use Ollama with other programs too, turn off **Settings → Engine → Stop Ollama when Maris closes**. Maris then only unloads its models and leaves the server alone.`
   },
   {
     id: 'code-mode',
@@ -251,13 +287,20 @@ Click the ring to see:
 
 ## A bigger or smaller window
 
-Under **Window size** in the popover, pick how much the model keeps in view: 8K, 16K, 32K (the default), 64K or more, up to what the model supports. Point at a size to see what it means here:
+Under **Window size** in the popover, pick how much the model keeps in view: 8K, 16K, 32K (the default), 64K, 128K and on **up to 1M or 2M tokens**, as far as the model supports. Point at a size to see what it means here:
 
 - **Bigger** keeps more of the chat, files and tool results in view, so older messages are summarised later. It needs more memory, and every step takes a little longer to read.
 - When the model and the window fit in video memory (green dot), answers come at full speed. When they do not (yellow dot), the part that does not fit runs from system memory, and writing gets slower; the popover estimates how much (for example *about 2.4× slower*).
 - **Smaller** is faster and leaves video memory for games or other programs, but long tasks get summarised sooner.
+- A size that needs more memory than this ${DEVICE} has (red dot) cannot be picked. A window of a million tokens takes tens of GB on your own ${DEVICE}, so the very large sizes are mostly for models at an API service.
 
 The choice applies to the model role in use: Code mode, or the Fast, Balanced or Max model in chats. The same sizes are in Settings → Auto model choice → Context windows.
+
+## Models at an API service
+
+For Claude, GPT and other [API models](help:api-models) the size is a **budget**: how much of a long chat is sent with each message, from 16K up to 2M tokens (64K to begin with). A model never gets more than it takes, and Maris fills about four fifths of a model’s window with the chat, so the answer has room. A bigger budget keeps more in view and **costs more per message**, because a full window is sent again every time; services charge less for the part they have cached.
+
+If a service says a chat is too long for its model, Maris leaves the oldest messages out of that request, tries again and remembers the model’s real size.
 
 ## When it gets full
 
@@ -526,6 +569,96 @@ Some big models (marked **A3B**, **A4B**…) only use a small part of themselves
 You can see your models, their roles and their sizes on the **Models** page.`
   },
   {
+    id: 'api-models',
+    title: 'Claude, GPT and other API models',
+    category: `Your ${DEVICE} and models`,
+    summary: `Adding a model service with an API key, picking its models, and what leaves your ${DEVICE}.`,
+    keywords: 'api key claude anthropic openai gpt gemini google openrouter groq mistral deepseek grok xai lm studio llama.cpp cloud service remote provider bill cost',
+    body: `Besides the models on your ${DEVICE}, Maris can answer with models that run **somewhere else**: Claude, GPT, Gemini and many more. You need an account with the service and its **API key** (a long password meant for programs). This is optional: without it, nothing changes.
+
+It is also a good way to get strong, fast answers on a ${DEVICE} that is too slow for big models.
+
+## Adding a service
+
+1. Open **Models → API**.
+2. Click the service: Claude, OpenAI, Google Gemini, OpenRouter, Groq, Mistral, DeepSeek or xAI. **Where do I get a key?** opens the right page of that service.
+3. Paste the key and click **Connect**. Maris reads the service’s list of models, which also checks the key.
+
+**LM Studio**, **llama.cpp server** and **Other service** are for a model server on your own ${DEVICE} or network, or any service with an OpenAI-compatible address. They take an address and often need no key.
+
+## Picking models
+
+Every service lists its models with a checkbox. Ticked models appear in the **model menu** at the top of each chat, under the service’s name.
+
+Maris reads the list from the service itself, so **new models show up without a new version of Maris**. **Refresh** reads it again; that also happens by itself once a day. Is a model missing? Type its id into the box under the list.
+
+## Using them
+
+- Pick the model in the model menu of a chat. That chat then always uses it, and a small cloud marks it.
+- To let **Auto** use one, give it a role on **Models → Text → Roles** (Fast, Balanced, Max or Code).
+- If no model is installed on this ${DEVICE} at all, Auto answers with one of your API models.
+
+Everything else works as usual: tools, Code mode, memory, connectors. Maris still **asks before it changes anything**.
+
+## What leaves your ${DEVICE}
+
+A chat with an API model is **sent to that service**: your messages, and what Maris reads for the task (file contents, command output, the memories that fit). The service’s own terms apply, and it **bills your account** for what is sent and answered. The line under the message box says where a message will go before you send it.
+
+Chats with models on your ${DEVICE} stay on your ${DEVICE}, as before. Services marked **On this computer** stay local too.
+
+Keys are stored encrypted with the system keychain, are only ever sent to their own service, and are never shown again. **Remove** deletes a service together with its key.
+
+## When a model cannot do something
+
+Models differ: some cannot use tools, see pictures or think step by step, and some services refuse certain options. Maris learns this from the service (its model list, or its first refusal), adapts the request and remembers. For a model without tool calling, for example, it describes the tools in plain text instead. There is nothing to set up.
+
+## When an answer is declined or cut short
+
+If a service declines a request or stops at its length limit, Maris says so under the answer and does not run a half-written action.`
+  },
+  {
+    id: 'slow-pc',
+    title: 'Maris on a slow or old computer',
+    category: `Your ${DEVICE} and models`,
+    summary: 'Low-power mode, small models, and how to get useful answers without a graphics card.',
+    keywords: 'slow old computer laptop cpu only no gpu graphics card low-power lite small model 4 gb 8 gb ram weak',
+    body: `Maris works without a graphics card, on processors that are more than ten years old, and with as little as 4 GB of memory. Everything is slower there, so Maris does less work for each answer.
+
+## What the setup assistant picks
+
+It measures the processor and the memory. On a slow ${DEVICE} it picks **one small model for every role**, so nothing is loaded twice, and gives it a small context window. For example:
+
+| The computer | Model | Writing speed |
+| --- | --- | --- |
+| 4 GB memory, 2 old cores | Qwen3 0.6B | about reading speed |
+| 4 GB memory, a newer processor | Qwen 2.5 1.5B | faster than you read |
+| 8 GB memory, 4 cores | Phi-4 mini | about reading speed |
+
+Small models are good at chatting, summarising, rewriting and simple tasks on your ${DEVICE}. They make more mistakes than big ones, most of all in long tasks with many steps. **Models → Text** lists more of them under “Small and older models for slow computers”.
+
+## Low-power mode
+
+On such a ${DEVICE} Maris turns on **low-power mode** by itself; the status bar then shows **Low-power**. In this mode Maris:
+
+- sends the model short instructions and only the tools a request needs, so the answer starts much sooner;
+- makes no extra model calls: the chat is named after your first words, and the request is not graded first;
+- keeps the context window small and summarises older messages earlier;
+- shows a plain window without blur and animations, and checks the system less often.
+
+Change it under **Settings → Engine → Low-power mode**: Auto, On or Off.
+
+## Models without tool calling
+
+Very small and older models cannot call tools the way newer ones do. Maris then describes its tools in plain text and reads the model’s request back out of its answer. So even those models can list a folder, read a file or search the web, and Maris still asks before any change.
+
+## Getting more out of it
+
+- **Use an API model for the hard things.** With a key for Claude, GPT or another service, a strong model answers quickly on any ${DEVICE}. See [Claude, GPT and other API models](help:api-models).
+- Start a new chat for a new topic: short chats are read much faster.
+- Close the browser and other heavy programs while Maris answers.
+- Pictures can be made on the processor with 8 GB of memory or more, at a few minutes each. Video needs a graphics card.`
+  },
+  {
     id: 'setup',
     title: 'The setup assistant and choosing models',
     category: `Your ${DEVICE} and models`,
@@ -551,7 +684,11 @@ For every role (Fast, Balanced, Max, Code, images, video) you see the recommende
 
 ## 4. Install
 
-Downloads run one after another. You can start using Maris right away; models switch on as they finish.`
+Downloads run one after another. You can start using Maris right away; models switch on as they finish.
+
+## On a slow computer
+
+Without a graphics card that can run models, and with little memory or an old processor, the assistant picks one small model for every role and turns on low-power mode. See [Maris on a slow or old computer](help:slow-pc). You can also skip the downloads and use [API models](help:api-models) only.`
   },
   {
     id: 'status-bar',
@@ -566,7 +703,7 @@ Downloads run one after another. You can start using Maris right away; models sw
 - **GPU**: how busy the graphics card is.
 - **VRAM**: graphics memory in use. Point at it to see how much belongs to Maris and how much to other programs. When other programs fill half of it or more, it also lists the three that use the most, each with an **×** to end it (like End task in Task Manager). Maris asks before ending anything, and never offers to end parts of ${IS_WIN ? 'Windows' : 'the system'} itself.
 - **Temperature** and **power** of the graphics card.
-- On the right: whether Maris is **idle** or **working**, and which models are loaded.
+- On the right: whether Maris is **idle** or **working**, and which models are loaded. **Low-power** appears there when [low-power mode](help:slow-pc) is on, and **API models** when no model runs on this ${DEVICE} and answers come from a service.
 
 Point at any part for details. You can hide parts in Settings → Status bar.
 
@@ -647,12 +784,17 @@ Everything also works with the keyboard alone: **Tab** moves between controls an
     keywords: 'problem error slow stopped ollama not responding antivirus norton download failed comfyui memory crash crashed closed unexpectedly stuck waiting next step',
     body: `## “Ollama is stopped”
 
-Click the red message in the status bar to start it. If that does not work, run the [setup assistant](help:setup) again; it can reinstall Ollama.
+Maris starts Ollama when it opens and stops it when it closes (see [Closing Maris](help:closing)), so this message means it could not be started or was closed by something else. Click the red message in the status bar to start it. If that does not work, run the [setup assistant](help:setup) again; it can reinstall Ollama.
+
+## An API model gives an error
+
+The message says what the service answered. The usual causes: the key was mistyped or revoked (**Models → API → Change the key or address**), the account is out of credit, the service is limiting requests for a moment, or the model was withdrawn (**Refresh** the service’s models and pick another). Chats with models on your ${DEVICE} keep working meanwhile.
 
 ## Answers are slow
 
 - Check the status bar: is a game or another program using the graphics card? Auto already uses smaller models then.
 - Pick a smaller model from the model menu, or switch **Settings → Engine → Where models run** to **GPU only**.
+- No graphics card, or an old ${DEVICE}? See [Maris on a slow or old computer](help:slow-pc).
 - The very first answer after starting loads the model and takes longer.
 
 ## Maris seems to do nothing between steps
@@ -687,7 +829,7 @@ Still stuck? The log file is in the app data folder (Settings → Data and setup
     category: 'Help and privacy',
     summary: 'Where your data lives and the only times Maris goes online.',
     keywords: 'privacy data local offline online internet where stored delete',
-    body: `Maris runs on your ${DEVICE}. Your conversations, files, memories and creations **never leave it**.
+    body: `Maris runs on your ${DEVICE}. Your conversations, files, memories and creations **stay on it**, with the exceptions listed here. Each of them is something you turn on yourself.
 
 ## When Maris goes online
 
@@ -696,12 +838,13 @@ Still stuck? The log file is in the app data folder (Settings → Data and setup
 - **Looking for updates and news** a few times a day. Only the list of versions and posts is downloaded; nothing about you is sent. Turn it off in Settings → Updates and news.
 - **Installing a skill** from a git address, once.
 - **Connectors you add.** When Maris uses one, its request goes to that service.
+- **API models you add** (Claude, GPT and others). A chat that uses one is sent to its service: your messages and what Maris reads for the task. This only happens when you pick such a model for a chat or give it a role, or when no model is installed on this ${DEVICE} at all. See [Claude, GPT and other API models](help:api-models).
 
-That is all. There are no accounts, no tracking and no cloud.
+That is all. Maris itself has no accounts, no tracking and no cloud of its own.
 
 ## Where things are stored
 
-- Chats, memories and settings: the app data folder (Settings → Data and setup → Open app data).
+- Chats, memories and settings: the app data folder (Settings → Data and setup → Open app data). API keys are kept there too, encrypted with the system keychain.
 - Models, the image engine and your pictures and videos: the data folder you chose in setup.
 
 ## Deleting things

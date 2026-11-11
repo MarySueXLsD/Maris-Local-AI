@@ -21,6 +21,10 @@ import { modKey, PLATFORM, REMOTE } from './lib/platform'
 
 function useAppearance(): void {
   const ui = useApp((s) => s.settings?.ui)
+  // Windows 10 and older graphics drivers have no see-through window material.
+  const material = useApp((s) => s.appInfo?.material)
+  // Low-power mode: a plain, still interface that leaves the processor to the model.
+  const lite = useApp((s) => Boolean(s.status?.lite))
   const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches)
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
@@ -55,9 +59,11 @@ function useAppearance(): void {
     if (ui.reduceMotion) root.dataset.reduceMotion = ''
     else delete root.dataset.reduceMotion
     root.dataset.density = ui.density
-    // Linux and the phone app have no see-through window material, so the page paints its own background.
-    if (ui.material === 'solid' || PLATFORM === 'linux' || REMOTE) root.dataset.noMica = ''
+    // Linux, Windows 10 and the phone app have no see-through window material, so the page paints its own background.
+    if (ui.material === 'solid' || PLATFORM === 'linux' || REMOTE || material === false || lite) root.dataset.noMica = ''
     else delete root.dataset.noMica
+    if (lite && !REMOTE) root.dataset.lite = ''
+    else delete root.dataset.lite
     root.dataset.chrome = REMOTE ? 'none' : PLATFORM === 'darwin' ? 'mac' : 'overlay'
     // An accent chosen in Settings overrides the theme's own.
     if (ui.accent) {
@@ -66,7 +72,7 @@ function useAppearance(): void {
       root.style.setProperty('--petal-soft', alpha(ui.accent, scheme === 'dark' ? 0.16 : 0.11))
       root.style.setProperty('--on-petal', contrast(ui.accent, '#ffffff') >= contrast(ui.accent, '#0d0b14') ? '#ffffff' : '#0d0b14')
     }
-  }, [ui, systemDark])
+  }, [ui, systemDark, material, lite])
 }
 
 /** Phone-sized window (or the phone app). */

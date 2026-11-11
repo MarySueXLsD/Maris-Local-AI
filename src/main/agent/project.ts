@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import type { Project } from '@shared/types'
 import { repo } from '../db'
@@ -9,6 +9,7 @@ export interface ProjectContext {
   path: string
   stack: string[]
   topLevel: string
+  /** `git status`, or a sentence about why git could not be asked. */
   git?: string
   instructions?: string
   /** The person's own description of the project. */
@@ -61,11 +62,27 @@ export function detectStack(dir: string): string[] {
   return [...found]
 }
 
-export function touchProject(dir: string): Project {
+/**
+ * One spelling per folder: absolute, without a trailing separator. "C:\work\app\" and "C:\work\app"
+ * used to become two projects, and chats of one did not show under the other.
+ */
+export const projectKey = (dir: string): string => path.resolve(String(dir).trim().replace(/^["']|["']$/g, ''))
+
+/** True when the folder exists (a project is a folder on this computer). */
+export function isProjectFolder(dir: string): boolean {
+  try {
+    return statSync(dir).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+export function touchProject(given: string): Project {
+  const dir = projectKey(given)
   const existing = repo.getProject(dir)
   const p: Project = {
     path: existing?.path ?? dir,
-    name: existing?.name ?? path.basename(dir),
+    name: existing?.name ?? (path.basename(dir) || dir),
     lastOpened: Date.now(),
     allowedCommands: existing?.allowedCommands ?? [],
     stack: detectStack(dir),
@@ -76,16 +93,19 @@ export function touchProject(dir: string): Project {
 }
 
 /** Rename a project or change what it is about (its folder stays where it is). */
-export function updateProject(dir: string, patch: { name?: string; description?: string }): Project {
+export function updateProject(given: string, patch: { name?: string; description?: string }): Project {
+  const dir = projectKey(given)
   const p = repo.getProject(dir) ?? touchProject(dir)
   if (patch.name !== undefined && patch.name.trim()) p.name = patch.name.trim().slice(0, 80)
   if (patch.description !== undefined) p.description = patch.description.trim().slice(0, 2000) || undefined
   repo.upsertProject(p)
   cache.delete(dir)
+  cache.delete(p.path)
   return p
 }
 
-export function allowCommand(dir: string, prefix: string): void {
+export function allowCommand(given: string, prefix: string): void {
+  const dir = projectKey(given)
   const p = repo.getProject(dir) ?? touchProject(dir)
   if (!p.allowedCommands.some((c) => c.toLowerCase() === prefix.toLowerCase())) {
     p.allowedCommands.push(prefix)
@@ -108,11 +128,21 @@ export async function projectContext(dir: string): Promise<ProjectContext> {
   }
   let git: string | undefined
   if (existsSync(path.join(dir, '.git'))) {
-    const r = await runShell('git -c core.quotepath=off status --short --branch', { cwd: dir, timeoutMs: 8000 }).catch(() => undefined)
+    const status = (extra: string): Promise<{ stdout: string; stderr: string } | undefined> =>
+      runShell(`git ${extra}-c core.quotepath=off status --short --branch`, { cwd: dir, timeoutMs: 8000 }).catch(() => undefined)
+    let r = await status('')
+    let note = ''
+    // Drives that do not record who owns a file (exFAT and FAT sticks and disks, some network shares)
+    // make git refuse the folder as "dubious ownership". Reading its status is safe, and the model is
+    // told how to write its own git commands there, instead of being told this is not a repository.
+    if (r && !r.stdout && /dubious ownership|safe\.directory/i.test(`${r.stderr}`)) {
+      r = await status("-c 'safe.directory=*' ")
+      note = "\n(Git does not trust this folder, because its drive does not record who owns files. Write git commands here as: git -c 'safe.directory=*' <command>)"
+    }
     if (r?.stdout) {
       const lines = r.stdout.split('\n')
-      git = lines.slice(0, 25).join('\n') + (lines.length > 25 ? `\n… ${lines.length - 25} more changed files` : '')
-    }
+      git = lines.slice(0, 25).join('\n') + (lines.length > 25 ? `\n… ${lines.length - 25} more changed files` : '') + note
+    } else if (r?.stderr) git = `(git could not read this repository: ${r.stderr.split('\n')[0]?.slice(0, 200)})`
   }
   let instructions = ''
   for (const f of INSTRUCTION_FILES) {

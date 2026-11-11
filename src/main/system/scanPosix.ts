@@ -10,6 +10,8 @@ export type { PosixGpu }
 
 export interface PosixRaw {
   cpu: { name?: string; cores?: number; threads?: number }
+  /** AVX2 and AVX-512, as the system reports them (left out where it does not, as on Apple chips). */
+  cpuFlags?: { avx?: boolean; avx2?: boolean; avx512?: boolean }
   mem: { speed?: number; type?: string; sticks?: number }
   gpus: PosixGpu[]
   disks: { root: string; free: number; size: number; fs?: string; label?: string }[]
@@ -106,7 +108,11 @@ async function scanLinux(): Promise<PosixRaw> {
     const amd = gpus.find((g) => g.vendorId === '0x1002' && /radeon/i.test(renderer))
     if (amd && /rx\s*\d/i.test(renderer)) amd.name = renderer.replace(/^AMD\s*/i, 'AMD ')
   }
-  const cpu = parseCpuinfo(read('/proc/cpuinfo'))
+  const cpuinfo = read('/proc/cpuinfo')
+  const cpu = parseCpuinfo(cpuinfo)
+  // x86 lists what the processor can do on its "flags" line (ARM has "Features" and no AVX at all).
+  const flags = /^flags\s*:\s*(.*)$/m.exec(cpuinfo)?.[1]
+  const cpuFlags = flags ? { avx: /\bavx\b/.test(flags), avx2: /\bavx2\b/.test(flags), avx512: /\bavx512f\b/.test(flags) } : undefined
   const chassis = Number(read('/sys/class/dmi/id/chassis_type'))
   let battery = false
   try {
@@ -116,6 +122,7 @@ async function scanLinux(): Promise<PosixRaw> {
   }
   return {
     cpu: { name: cpu.name, cores: cpu.cores, threads: os.cpus().length },
+    cpuFlags,
     mem: parseUdevMemory(udev),
     gpus,
     disks: parseDf(df, false),
@@ -125,8 +132,10 @@ async function scanLinux(): Promise<PosixRaw> {
 
 async function scanMac(): Promise<PosixRaw> {
   const totalMB = Math.round(os.totalmem() / 2 ** 20)
-  const [sysctl, displays, hw, df] = await Promise.all([
+  const [sysctl, avx, displays, hw, df] = await Promise.all([
     run('sysctl', ['-n', 'machdep.cpu.brand_string', 'hw.physicalcpu', 'hw.logicalcpu'], 4000),
+    // Intel Macs only; Apple chips have no such keys (and the output is empty).
+    run('sysctl', ['-n', 'hw.optional.avx1_0', 'hw.optional.avx2_0', 'hw.optional.avx512f'], 4000),
     run('system_profiler', ['SPDisplaysDataType', '-json'], 15000),
     run('system_profiler', ['SPHardwareDataType', 'SPMemoryDataType', '-json'], 15000),
     run('df', ['-kP'], 6000)
@@ -135,8 +144,10 @@ async function scanMac(): Promise<PosixRaw> {
   const gpus = parseMacDisplays(displays, appleGpuBudgetMB(totalMB))
   const hardware = parseMacHardware(hw)
   const apple = gpus.find((g) => /^apple\b/i.test(g.name))
+  const [a1, a2, a512] = avx.split('\n').map((s) => s.trim())
   return {
     cpu: { name: brand || os.cpus()[0]?.model, cores: Number(phys) || undefined, threads: Number(logical) || os.cpus().length },
+    cpuFlags: a1 === '1' || a1 === '0' ? { avx: a1 === '1', avx2: a2 === '1', avx512: a512 === '1' } : undefined,
     mem: { type: hardware.memType, sticks: 1 },
     gpus,
     disks: parseDf(df, true),

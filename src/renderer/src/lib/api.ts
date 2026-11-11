@@ -10,6 +10,7 @@ import type {
   SkillInfo,
   UpdateState
 } from '@shared/extensions'
+import type { ProviderInfo, ProviderPreset } from '@shared/providers'
 import type {
   ApprovalRequest,
   Attachment,
@@ -276,6 +277,21 @@ export interface MarisApi {
     reconnect(id: string): Promise<ConnectorInfo[]>
     onChange(cb: (s: ConnectorInfo[]) => void): Off
   }
+  /** Model services besides Ollama: Claude, and anything with an OpenAI-compatible address. */
+  providers: {
+    list(): Promise<ProviderInfo[]>
+    presets(): Promise<ProviderPreset[]>
+    /** Add a service; its models are read to check the address and key. The key is stored in the system keychain. */
+    add(presetId: string, values: { key?: string; baseUrl?: string; name?: string }): Promise<ProviderInfo[]>
+    edit(id: string, values: { key?: string; baseUrl?: string; name?: string }): Promise<ProviderInfo[]>
+    remove(id: string): Promise<ProviderInfo[]>
+    setEnabled(id: string, on: boolean): Promise<ProviderInfo[]>
+    /** Which of the service's models show up in Maris. */
+    setPicked(id: string, picked: string[]): Promise<ProviderInfo[]>
+    /** Read the service's models again. */
+    refresh(id: string): Promise<ProviderInfo[]>
+    onChange(cb: (s: ProviderInfo[]) => void): Off
+  }
   link: {
     status(): Promise<LinkStatus>
     startPairing(): Promise<LinkStatus>
@@ -284,7 +300,7 @@ export interface MarisApi {
     onStatus(cb: (s: LinkStatus) => void): Off
   }
   app: {
-    info(): Promise<{ version: string; userDir: string; dataDir: string; electron: string }>
+    info(): Promise<{ version: string; userDir: string; dataDir: string; electron: string; /** The system can show the desktop through the window (Windows 11, macOS). */ material?: boolean }>
     onCommand(cb: (cmd: string) => void): Off
   }
 }

@@ -34,6 +34,14 @@ class SettingsService {
       repo.setKv('settings-migrations', [...done])
       if (stored) repo.setKv('settings', this.current)
     }
+    if (!done.has('close-quits')) {
+      // Closing the window used to leave Maris in the tray with its models still in video memory.
+      // Closing now closes Maris and frees that memory; staying in the tray is a choice in Settings.
+      if (stored && this.current.ui.closeToTray === true) this.current.ui.closeToTray = false
+      done.add('close-quits')
+      repo.setKv('settings-migrations', [...done])
+      if (stored) repo.setKv('settings', this.current)
+    }
     if (!this.current.dataDir) {
       this.current.dataDir = suggestDataDir()
       repo.setKv('settings', this.current)

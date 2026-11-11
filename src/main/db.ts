@@ -232,7 +232,7 @@ export const repo = {
     ).run(p.path, p.name, p.lastOpened, JSON.stringify({ allowedCommands: p.allowedCommands, stack: p.stack, description: p.description }))
   },
   removeProject(path: string): void {
-    db.prepare('DELETE FROM projects WHERE path = ?').run(path)
+    db.prepare('DELETE FROM projects WHERE lower(path) = lower(?)').run(path)
   },
   deleteConversation(id: string): void {
     db.prepare('DELETE FROM messages_fts WHERE conversation_id = ?').run(id)

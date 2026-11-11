@@ -3,10 +3,11 @@ import { createTwoFilesPatch } from 'diff'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import type { ApprovalPreview } from '@shared/types'
 import { formatBytes, truncate } from '../util'
-import { backupDir, isSystemPath, resolvePath } from './paths'
+import { backupDir, isInside, isSystemPath, resolvePath } from './paths'
 import { DEVICE_WORD, IS_WIN, OS_LABEL, TRASH_LABEL } from '../platform'
 import { bool, num, schema, str, ToolError, type ToolDef } from './types'
 
@@ -214,7 +215,7 @@ export const fsTools: ToolDef[] = [
           const full = path.join(dir, e.name)
           count++
           if (e.isDirectory()) {
-            lines.push(`${'  '.repeat(level)}[dir]  ${e.name}\\`)
+            lines.push(`${'  '.repeat(level)}[dir]  ${e.name}${path.sep}`)
             if (level + 1 < depth && !SKIP_DIRS.has(e.name.toLowerCase())) await walk(full, level + 1)
           } else {
             const st = await fs.stat(full).catch(() => undefined)
@@ -598,7 +599,10 @@ export const fsTools: ToolDef[] = [
       const p = resolvePath(str(args.path, 'path'), ctx.cwd)
       const st = await fs.stat(p).catch(() => undefined)
       if (!st) throw new ToolError(`Not found: ${p}`)
-      if (/^[a-z]:\\?$/i.test(p)) throw new ToolError('Refusing to delete a whole drive.')
+      if (/^[a-z]:\\?$/i.test(p) || p === path.parse(p).root) throw new ToolError('Refusing to delete a whole drive.')
+      // The home folder, and the folders it is in, hold everything the person has.
+      const home = os.homedir()
+      if (isInside(home, p)) throw new ToolError(`Refusing to delete ${p}: it is your home folder or contains it. Name the files or folders inside it that should go.`)
       return {
         risk: riskFor(p),
         title: `Move to ${TRASH_LABEL}: ${p}`,

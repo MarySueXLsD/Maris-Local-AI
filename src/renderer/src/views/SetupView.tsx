@@ -20,7 +20,7 @@ import {
 } from 'lucide-react'
 import { Switch as RSwitch } from 'radix-ui'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { budgetOf, defaultPrefs, diskFor, diskName, makePlan, ROLE_TEXT } from '@shared/recommend'
+import { budgetOf, cpuMediaRoom, defaultPrefs, diskFor, diskName, makePlan, ROLE_TEXT } from '@shared/recommend'
 import type { CatalogModel, PcScan, Placement, PlanItem, Processing, SetupPrefs, SetupProgress, SetupRole, SetupTask } from '@shared/types'
 import { api, type PackInfo } from '../lib/api'
 import { MarisMark } from '../components/MarisMark'
@@ -425,10 +425,18 @@ export function SetupView() {
                     <span>
                       <span className="block text-[0.95rem] text-text">Image generation</span>
                       <span className="block text-[0.84rem] text-text-2">
-                        {!b.mediaGpu || prefs.processing === 'cpu' ? 'Small pictures with a model that runs on the processor, about a minute each.' : 'Pictures from a description, in seconds on the GPU.'}
+                        {!b.mediaGpu || prefs.processing === 'cpu'
+                          ? cpuMediaRoom(b)
+                            ? 'Small pictures with a model that runs on the processor. Each one takes a few minutes.'
+                            : 'Needs a supported graphics card, or about 8 GB of memory to make small pictures on the processor.'
+                          : 'Pictures from a description, in seconds on the GPU.'}
                       </span>
                     </span>
-                    <Toggle label="Image generation" checked={prefs.images} onChange={(v) => setPrefs({ ...prefs, images: v })} />
+                    <Toggle
+                      label="Image generation"
+                      checked={prefs.images && (b.mediaGpu || cpuMediaRoom(b))}
+                      onChange={(v) => setPrefs({ ...prefs, images: v && (b.mediaGpu || cpuMediaRoom(b)) })}
+                    />
                   </div>
                   <div className="flex items-center justify-between gap-6 py-3.5">
                     <span>

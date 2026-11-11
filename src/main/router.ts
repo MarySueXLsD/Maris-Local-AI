@@ -9,8 +9,13 @@ import type {
   ThinkMode,
   Tier
 } from '@shared/types'
+import { usableWindow } from '@shared/context'
+import { DEFAULT_SETTINGS } from '@shared/defaults'
+import { isRemoteModel } from '@shared/providers'
+import { looseJson } from '@shared/textTools'
 import { repo } from './db'
-import { ollama } from './engines/ollama'
+import { llm } from './engines/llm'
+import { localOptions } from './memory/utility'
 import { clamp, log } from './util'
 
 export const USER_TIERS: Tier[] = ['fast', 'balanced', 'max']
@@ -124,7 +129,7 @@ async function classifyWithTiny(text: string, tiny: string, timeoutMs = 2500): P
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), timeoutMs)
   try {
-    const r = await ollama.chatOnce(
+    const r = await llm.chatOnce(
       {
         model: tiny,
         think: false,
@@ -134,7 +139,7 @@ async function classifyWithTiny(text: string, tiny: string, timeoutMs = 2500): P
           required: ['difficulty']
         },
         // Same num_ctx/num_gpu as the background helper calls so Ollama never reloads the tiny model.
-        options: { num_gpu: 0, num_ctx: 8192, temperature: 0, num_predict: 20 },
+        options: { ...localOptions(tiny), temperature: 0, num_predict: 20 },
         keep_alive: '60m',
         messages: [
           {
@@ -147,7 +152,7 @@ async function classifyWithTiny(text: string, tiny: string, timeoutMs = 2500): P
       },
       ctrl.signal
     )
-    const d = Number((JSON.parse(r.content) as { difficulty: number }).difficulty)
+    const d = Number((looseJson(r.content) as { difficulty?: number } | undefined)?.difficulty)
     return Number.isFinite(d) ? clamp((d - 1) / 4, 0, 1) : undefined
   } catch {
     return undefined
@@ -167,9 +172,12 @@ export function learnedBias(category: TaskCategory): number {
 }
 
 /** Fill tier slots from installed models without overriding valid user choices. */
-export function assignTiers(models: ModelInfo[], tiers: Settings['tiers'], vramTotalMB: number): Settings['tiers'] {
-  const names = new Set(models.map((m) => m.name))
+export function assignTiers(all: ModelInfo[], tiers: Settings['tiers'], vramTotalMB: number): Settings['tiers'] {
+  const names = new Set(all.map((m) => m.name))
   const out = { ...tiers }
+  // Roles are only ever filled in by themselves with models on this computer. A model of an API
+  // service plays a role when the person puts it there (what is sent to it leaves the computer).
+  const models = all.filter((m) => !m.provider)
   const chatModels = models
     .filter((m) => !m.capabilities.includes('embedding') && m.capabilities.includes('completion'))
     .sort((a, b) => a.sizeBytes - b.sizeBytes)
@@ -206,6 +214,36 @@ export interface RouteInput {
   mode?: ChatMode
   /** "continue", "go on": the kind of task the answer before was, so it carries on the same way. */
   previous?: { category: TaskCategory; complexity: number }
+  /** Low-power mode: no extra model call to grade the request. */
+  lite?: boolean
+}
+
+/** What a service said a model really takes, learned when a request was too long for it (kept while Maris runs). */
+const learnedWindow = new Map<string, number>()
+
+export function noteApiWindow(model: string, tokens: number): void {
+  if (tokens >= 2048) learnedWindow.set(model, Math.min(tokens, learnedWindow.get(model) ?? Infinity))
+}
+
+/**
+ * The window for a model at an API service: the budget set in Settings (up to millions of tokens),
+ * and never more than the model takes, with a margin because Maris's token counts are estimates.
+ */
+export function apiContext(info: ModelInfo | undefined, cfg: Settings): number {
+  const budget = Math.max(8192, cfg.routing.apiContext || 65536)
+  const takes = Math.min(info?.contextLength || Infinity, (info && learnedWindow.get(info.name)) || Infinity)
+  return Number.isFinite(takes) ? Math.min(budget, usableWindow(takes)) : budget
+}
+
+/**
+ * The window for a model on this computer: the size set for its role. On the processor it is at most
+ * 16K (reading a long prompt is slow there), unless the person chose the size themselves.
+ */
+export function localContext(cfg: Settings, tier: Tier | 'custom', code: boolean, cpuOnly: boolean): number {
+  const key = tier === 'custom' ? 'balanced' : tier
+  const set = code ? cfg.routing.codeContext : cfg.routing.contextByTier[key]
+  const untouched = set === (code ? DEFAULT_SETTINGS.routing.codeContext : DEFAULT_SETTINGS.routing.contextByTier[key])
+  return cpuOnly && untouched ? Math.min(set, 16384) : set
 }
 
 /**
@@ -259,31 +297,47 @@ export async function route(
   const ctxFor = (t: Tier | 'custom'): number => (code ? cfg.routing.codeContext : cfg.routing.contextByTier[t === 'custom' ? 'balanced' : t])
 
   const cpuMode = cfg.engine.processing === 'cpu'
+  /** Where a model of an API service runs, for the decision and its explanation. */
+  const away = (name: string): { provider?: string; remote?: boolean; where: string } => {
+    const info = byName.get(name)
+    if (!info?.provider) return { where: '' }
+    return {
+      provider: info.providerName ?? info.provider,
+      remote: info.remote !== false,
+      where: info.remote === false ? ` It runs in ${info.providerName ?? 'a server'} on your own computer or network.` : ` It runs at ${info.providerName ?? 'an API service'}, so this chat is sent there.`
+    }
+  }
 
   // Explicit model chosen by the user: respect it, only decide think/context.
   if (input.explicitModel && input.explicitModel !== 'auto') {
     const name = input.explicitModel
     const tier = tierOf(name)
-    const numCtx = ctxFor(tier)
+    const api = isRemoteModel(name)
+    const at = away(name)
     return {
       model: name,
       tier,
-      think: decideThink(name, a.complexity, cpuMode),
-      numCtx,
-      cpuOnly: cpuMode,
-      reason: `You chose ${prettyModel(name)} for this chat.${cpuMode ? ' It runs on the CPU (Settings → Engine).' : ''}`,
+      think: decideThink(name, a.complexity, cpuMode && !api),
+      // A window is never wider than the model takes (Settings offers sizes up to 2M for every role).
+      numCtx: api ? apiContext(byName.get(name), cfg) : Math.min(localContext(cfg, tier, code, cpuMode), byName.get(name)?.contextLength || Infinity),
+      cpuOnly: cpuMode && !api,
+      reason: `You chose ${byName.get(name)?.label ?? prettyModel(name)} for this chat.${api ? at.where : cpuMode ? ' It runs on the CPU (Settings → Engine).' : ''}`,
       auto: false,
       category: a.category,
-      complexity: a.complexity
+      complexity: a.complexity,
+      provider: at.provider,
+      remote: at.remote
     }
   }
 
   let complexity = a.complexity
   const reasons: string[] = []
-  if (!a.confident && cfg.routing.smartClassifier && cfg.tiers.tiny && byName.has(cfg.tiers.tiny)) {
-    const llm = await classifyWithTiny(input.text, cfg.tiers.tiny)
-    if (llm !== undefined) {
-      complexity = clamp(0.4 * complexity + 0.6 * llm, 0, 1)
+  // Grading an unclear request with the helper model costs a model call: worth it on a quick computer,
+  // not on a slow one, and not when the helper sits at an API service.
+  if (!a.confident && cfg.routing.smartClassifier && !input.lite && cfg.tiers.tiny && byName.has(cfg.tiers.tiny) && !isRemoteModel(cfg.tiers.tiny)) {
+    const graded = await classifyWithTiny(input.text, cfg.tiers.tiny)
+    if (graded !== undefined) {
+      complexity = clamp(0.4 * complexity + 0.6 * graded, 0, 1)
       reasons.push('the tiny model helped grade the request')
     }
   }
@@ -303,26 +357,32 @@ export async function route(
     reasons.push('tasks on the PC need a model that uses tools reliably')
   }
 
-  // ---- system constraints
+  // A dedicated coding model (Models → Roles → Code) takes the Max slot in Code mode.
+  const slotOf = (t: Tier): string | undefined => (code && t === 'max' && cfg.tiers.code && byName.has(cfg.tiers.code) ? cfg.tiers.code : cfg.tiers[t])
+
+  // ---- system constraints: about this computer, so they do not hold back a model that runs elsewhere
+  const wantedAway = isRemoteModel(slotOf(wanted))
   let cpuOnly = cpuMode
-  if (cpuMode) reasons.push('models run on the CPU (Settings → Engine)')
   const comfyBusy = sys.comfy.busy || sys.activeJobs.media > 0
-  if (comfyBusy && !cpuMode) {
-    wanted = 'fast'
-    cpuOnly = cfg.routing.allowCpuFallback
-    reasons.push('the GPU is busy generating media')
-  } else if (sys.busy === 'heavy') {
-    // Code work and PC tasks need a capable model more than a quick one: one step down, not to the smallest.
-    const lower: Tier = code || pcTask ? (wanted === 'max' ? 'balanced' : wanted) : 'fast'
-    if (wanted !== lower) reasons.push('another app is using the GPU heavily')
-    wanted = lower
-  } else if (sys.busy === 'busy' && wanted === 'max') {
-    wanted = 'balanced'
-    reasons.push('your PC is busy')
-  }
-  if (sys.onBattery && wanted === 'max' && cfg.routing.stepDownOnBattery) {
-    wanted = 'balanced'
-    reasons.push('you are on battery')
+  if (!wantedAway) {
+    if (cpuMode) reasons.push('models run on the CPU (Settings → Engine)')
+    if (comfyBusy && !cpuMode) {
+      wanted = 'fast'
+      cpuOnly = cfg.routing.allowCpuFallback
+      reasons.push('the GPU is busy generating media')
+    } else if (sys.busy === 'heavy') {
+      // Code work and PC tasks need a capable model more than a quick one: one step down, not to the smallest.
+      const lower: Tier = code || pcTask ? (wanted === 'max' ? 'balanced' : wanted) : 'fast'
+      if (wanted !== lower) reasons.push(sys.gpu && !cpuMode ? 'another app is using the GPU heavily' : 'other programs are keeping the processor busy')
+      wanted = lower
+    } else if (sys.busy === 'busy' && wanted === 'max') {
+      wanted = 'balanced'
+      reasons.push('your PC is busy')
+    }
+    if (sys.onBattery && wanted === 'max' && cfg.routing.stepDownOnBattery) {
+      wanted = 'balanced'
+      reasons.push('you are on battery')
+    }
   }
 
   // ---- availability + capability fallback
@@ -340,7 +400,6 @@ export async function route(
   }
   let tier: Tier = wanted
   let model: string | undefined
-  // A dedicated coding model (Models → Roles → Code) takes the Max slot in Code mode.
   const slot = (t: Tier): string | undefined => (code && t === 'max' && usable(cfg.tiers.code) ? cfg.tiers.code : cfg.tiers[t])
   for (const t of candidates(wanted)) {
     if (usable(slot(t))) {
@@ -349,19 +408,39 @@ export async function route(
       break
     }
   }
+  const noRoles = !order.some((t) => cfg.tiers[t] && byName.has(cfg.tiers[t]!))
   if (!model) {
-    model = models.find((m) => usable(m.name))?.name
+    // No model in a role can take this. A model that runs here comes first (Ollama, then another server
+    // on this computer or network). One at an API service answers by itself only when nothing runs here
+    // at all: what is sent to it leaves the computer, so otherwise it has to be picked for the chat or
+    // given a role.
+    const chat = (m: ModelInfo): boolean => m.capabilities.includes('completion') && !m.capabilities.includes('embedding')
+    const here = models.filter((m) => !m.remote && chat(m))
+    model = here.find((m) => !m.provider && usable(m.name))?.name ?? here.find((m) => usable(m.name))?.name ?? (here.length ? undefined : models.find((m) => usable(m.name))?.name)
     tier = 'fast'
   }
-  if (!model) throw new Error('No chat model is installed. Open Models and download one (for example qwen3.5:4b).')
-  if (tier !== wanted && !comfyBusy) reasons.push(`the ${TIER_LABEL[wanted].toLowerCase()} model is not installed`)
+  if (!model) {
+    const others = models.filter((m) => m.capabilities.includes('completion') && !m.capabilities.includes('embedding'))
+    throw new Error(
+      a.needsVision && others.length
+        ? others.some((m) => m.remote && m.capabilities.includes('vision'))
+          ? 'None of the models on this computer can see pictures. Pick one that can in the model menu above the chat (one of your API models, for example), or remove the picture.'
+          : 'None of your models can see pictures. Open Models and install one that does, or remove the picture.'
+        : 'No chat model is set up yet. Open Models to download one, or add an API key there (Models → API).'
+    )
+  }
+  if (noRoles) reasons.push('no models are assigned to Fast, Balanced and Max yet (Models → Roles), so the first one available answers')
+  else if (tier !== wanted && !comfyBusy) reasons.push(`the ${TIER_LABEL[wanted].toLowerCase()} model is not installed`)
   // While the graphics card makes a picture or video, everything runs on the processor: there a small
   // model answers a quick question or a chat message many times faster than the Fast one.
-  if (comfyBusy && cpuOnly && !code && (a.category === 'quick' || a.category === 'chat') && usable(cfg.tiers.tiny)) {
-    model = cfg.tiers.tiny
+  if (comfyBusy && cpuOnly && !code && !isRemoteModel(model) && (a.category === 'quick' || a.category === 'chat') && usable(cfg.tiers.tiny) && !isRemoteModel(cfg.tiers.tiny)) {
+    model = cfg.tiers.tiny!
     tier = 'tiny'
     reasons.push('a small model answers quickly on the processor')
   }
+  // A model at an API service is not limited by this computer's processor or graphics card.
+  let api = isRemoteModel(model)
+  if (api) cpuOnly = false
 
   // ---- VRAM fit: allow some CPU offload for the big model, otherwise step down.
   let numCtx = ctxFor(tier)
@@ -373,7 +452,7 @@ export async function route(
   const hybrid = cfg.engine.processing === 'hybrid'
   const stepFactor = hybrid ? 2.5 : 1
   const cpuFactor = hybrid ? 3 : 1.6
-  if (gpuTotal > 0 && !cpuOnly) {
+  if (gpuTotal > 0 && !cpuOnly && !api) {
     const available = gpuTotal - sys.external.vramMB - cfg.engine.gpuReserveMB
     // The context window is the person's choice (Settings, or the context popover, which says what it
     // costs). Which model fits is judged without its extra room, so a big window does not swap Max for a
@@ -383,7 +462,8 @@ export async function route(
     while (need > available * stepFactor && tier !== 'fast') {
       const lower: Tier = tier === 'max' ? 'balanced' : 'fast'
       const lowerModel = slot(lower)
-      if (!usable(lowerModel)) break
+      // The next model down must be one on this computer: a full graphics card is no reason to send a chat away.
+      if (!usable(lowerModel) || isRemoteModel(lowerModel)) break
       reasons.push(`only ${Math.max(0, Math.round(available / 1024))} GB of VRAM is free`)
       tier = lower
       model = lowerModel
@@ -404,7 +484,7 @@ export async function route(
 
   // ---- prefer an already-loaded neighbour when the score is borderline (avoids a reload).
   const loaded = new Set(sys.ollama.loaded.map((m) => m.name))
-  if (cfg.routing.preferLoaded && !cpuOnly && !loaded.has(model) && !code) {
+  if (cfg.routing.preferLoaded && !cpuOnly && !api && !loaded.has(model) && !code) {
     const near = Math.min(Math.abs(c - tFast), Math.abs(c - tBalanced)) < 0.07
     if (near) {
       for (const t of order) {
@@ -420,10 +500,23 @@ export async function route(
     }
   }
 
-  if (!code && input.historyTokens + 3000 > numCtx) numCtx = Math.min(32768, Math.max(numCtx, 2 ** Math.ceil(Math.log2(input.historyTokens + 3000))))
-  // CPU prompt processing is slow; keep the window small (Code mode still needs room for files).
-  // Reading a long prompt is slow on a processor: at most 16K there (Maris widens it if the tools need room).
-  if (cpuOnly) numCtx = Math.min(numCtx, 16384)
+  api = isRemoteModel(model)
+  const at = away(model)
+  if (api) {
+    numCtx = apiContext(byName.get(model), cfg)
+    reasons.push(at.remote ? `it runs at ${at.provider}, so this chat is sent there` : `it runs in ${at.provider} on your own computer or network`)
+  } else {
+    // A long chat gets a wider window, except on a slow computer, where the window stays as set and
+    // older messages are summarised instead (a bigger window means more to read, slowly).
+    // (Only ever wider: a window the person set larger than 32K stays as it is.)
+    if (!code && !input.lite && input.historyTokens + 3000 > numCtx) numCtx = Math.max(numCtx, Math.min(32768, 2 ** Math.ceil(Math.log2(input.historyTokens + 3000))))
+    // Reading a long prompt is slow on a processor: at most 16K there, unless the person chose the size
+    // themselves (Maris widens it if the tools need room).
+    if (cpuOnly) numCtx = Math.min(numCtx, Math.max(16384, localContext(cfg, tier, code, true)))
+  }
+
+  // A window is never wider than the model takes (Settings offers sizes up to 2M for every role).
+  if (!api) numCtx = Math.min(numCtx, byName.get(model)?.contextLength || Infinity)
 
   const think = decideThink(model, c, cpuOnly)
   const categoryLabel: Record<TaskCategory, string> = {
@@ -454,7 +547,9 @@ export async function route(
     reason,
     auto: true,
     category: a.category,
-    complexity: c
+    complexity: c,
+    provider: at.provider,
+    remote: at.remote
   }
 }
 

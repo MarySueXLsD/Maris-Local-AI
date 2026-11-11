@@ -24,6 +24,7 @@ import {
 } from 'lucide-react'
 import { Switch as RSwitch } from 'radix-ui'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { contextLabel } from '@shared/context'
 import { DEFAULT_SETTINGS, getPath, patchFor } from '@shared/defaults'
 import type { Settings } from '@shared/types'
 import { api, type PackInfo } from '../lib/api'
@@ -286,6 +287,10 @@ function Control({ def, s, update, packs }: { def: SettingDef; s: Settings; upda
           onChange={(e) => set(typeof def.options?.[0]?.value === 'number' ? Number(e.target.value) : e.target.value)}
           className={cn(inputCls, 'w-auto min-w-36 py-1.5')}
         >
+          {/* A value set elsewhere (the context ring offers a model's own limit) is listed too, so it shows as chosen. */}
+          {value !== undefined && value !== '' && !def.options?.some((o) => String(o.value) === String(value)) && (
+            <option value={String(value)}>{typeof value === 'number' && /ontext/.test(def.path) ? contextLabel(value) : String(value)}</option>
+          )}
           {def.options?.map((o) => (
             <option key={o.value} value={o.value}>
               {o.label}

@@ -6,50 +6,31 @@ import https from 'node:https'
 import { join } from 'node:path'
 import type { LoadedModel, ModelInfo, PullProgress } from '@shared/types'
 import { settings } from '../settings'
-import { log, sleep } from '../util'
+import { estimateTokens, log, sleep } from '../util'
 import { isRunnerCrash } from './errors'
+import { CapabilityError, type LlmChunk, type LlmMessage, type LlmRequest, type LlmResult } from './types'
 
-export interface OllamaToolCall {
-  id?: string
-  function: { index?: number; name: string; arguments: Record<string, unknown> | string }
-}
-
-export interface OllamaMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool'
-  content: string
-  images?: string[]
-  thinking?: string
-  tool_calls?: OllamaToolCall[]
-  tool_name?: string
-}
-
-export interface OllamaTool {
-  type: 'function'
-  function: { name: string; description: string; parameters: Record<string, unknown> }
-}
-
-export interface ChatRequest {
-  model: string
-  messages: OllamaMessage[]
-  tools?: OllamaTool[]
-  think?: boolean
-  format?: 'json' | Record<string, unknown>
-  options?: Record<string, unknown>
-  keep_alive?: string | number
-}
-
-export interface ChatChunk {
-  model?: string
-  message?: { role: string; content?: string; thinking?: string; tool_calls?: OllamaToolCall[] }
-  done?: boolean
-  done_reason?: string
-  total_duration?: number
-  load_duration?: number
-  prompt_eval_count?: number
-  prompt_eval_duration?: number
-  eval_count?: number
-  eval_duration?: number
-  error?: string
+/** Maris's messages as Ollama takes them: without the fields only other engines use. */
+function toWire(messages: LlmMessage[]): Record<string, unknown>[] {
+  return messages.map((m) => {
+    const out: Record<string, unknown> = { role: m.role, content: m.content }
+    if (m.images?.length) out.images = m.images
+    if (m.tool_name) out.tool_name = m.tool_name
+    if (m.tool_calls?.length) {
+      out.tool_calls = m.tool_calls.map((c) => {
+        let args: unknown = c.function.arguments
+        if (typeof args === 'string') {
+          try {
+            args = JSON.parse(args)
+          } catch {
+            args = { input: args }
+          }
+        }
+        return { function: { name: c.function.name, arguments: args ?? {} } }
+      })
+    }
+    return out
+  })
 }
 
 /** POST a JSON body and resolve with the streaming response (no connection reuse). */
@@ -230,14 +211,30 @@ class OllamaClient {
    * Streaming chat. Yields raw Ollama chunks. A watchdog aborts requests that never start
    * (retried once) or that go silent mid-stream, so a stuck call can never freeze a task.
    */
-  async *chat(body: ChatRequest, signal?: AbortSignal): AsyncGenerator<ChatChunk> {
+  async *chat(body: LlmRequest, signal?: AbortSignal): AsyncGenerator<LlmChunk> {
     const eng = settings.get().engine
-    const IDLE_MS = Math.max(30, eng.idleTimeoutSec) * 1000
-    const firstMs = Math.max(30, eng.firstTokenTimeoutSec) * 1000
+    const onCpu = Number(body.options?.num_gpu) === 0 || eng.processing === 'cpu'
+    // Nothing streams while a model reads its prompt. A graphics card reads thousands of tokens a
+    // second, an old processor a few dozen: there, a long prompt alone can take minutes, so the wait
+    // grows with the prompt instead of giving up on a model that is simply still reading.
+    const promptTokens = estimateTokens(JSON.stringify(body.messages)) + (body.tools ? estimateTokens(JSON.stringify(body.tools)) : 0)
+    const readMs = (promptTokens / (onCpu ? 8 : 120)) * 1000
+    const IDLE_MS = Math.max(30, body.timeouts?.idleSec ?? eng.idleTimeoutSec * (onCpu ? 2 : 1)) * 1000
+    const firstMs = Math.max(30_000, (body.timeouts?.firstSec ?? eng.firstTokenTimeoutSec) * 1000, readMs + (onCpu ? 120_000 : 30_000))
+    const payload = JSON.stringify({
+      model: body.model,
+      messages: toWire(body.messages),
+      ...(body.tools?.length ? { tools: body.tools } : {}),
+      ...(body.think !== undefined ? { think: body.think } : {}),
+      ...(body.format ? { format: body.format } : {}),
+      ...(body.options ? { options: body.options } : {}),
+      stream: true,
+      keep_alive: body.keep_alive ?? this.keepAlive()
+    })
     for (let attempt = 0; attempt < 2; attempt++) {
-      // A loaded model starts streaming within seconds; a cold load of a big model can take minutes.
+      // A loaded model on a graphics card starts streaming within seconds; a cold load of a big model can take minutes.
       const loaded = (await this.ps()).some((m) => m.name === body.model)
-      const FIRST_CHUNK_MS = loaded ? Math.min(90_000, firstMs) : firstMs
+      const FIRST_CHUNK_MS = loaded && !onCpu ? Math.min(firstMs, Math.max(90_000, readMs + 30_000)) : firstMs
       const ctrl = new AbortController()
       const onAbort = (): void => ctrl.abort()
       signal?.addEventListener('abort', onAbort, { once: true })
@@ -249,9 +246,17 @@ class OllamaClient {
       try {
         // Plain node:http with one connection per request: fetch's pooled connections could
         // stall after several back-to-back streamed requests within one agent turn.
-        res = await postStream(`${this.base}/api/chat`, JSON.stringify({ ...body, stream: true, keep_alive: body.keep_alive ?? this.keepAlive() }), ctrl.signal)
+        res = await postStream(`${this.base}/api/chat`, payload, ctrl.signal)
         if (res.statusCode !== 200) {
           const text = await readAll(res).catch(() => '')
+          // The model's details were out of date about what it can do: the caller shapes the request again.
+          if (res.statusCode === 400) {
+            const what = /does not support tools/i.test(text) ? 'tools' : /does not support thinking/i.test(text) ? 'thinking' : /does not support (images?|vision)/i.test(text) ? 'vision' : undefined
+            if (what) {
+              this.showCache.delete(body.model)
+              throw new CapabilityError(what, this.explainError(400, text, body.model))
+            }
+          }
           // Ollama's model process dropped the request: the next request starts it again.
           if ((res.statusCode ?? 0) >= 500 && isRunnerCrash(text) && attempt === 0) {
             log.warn('ollama', `${body.model}: model process stopped (${text.slice(0, 160)}), retrying once`)
@@ -262,7 +267,7 @@ class OllamaClient {
         }
         const o = body.options ?? {}
         this.loadedWith.set(body.model, { num_ctx: Number(o.num_ctx ?? 4096), num_gpu: o.num_gpu as number | undefined })
-        for await (const chunk of ndjsonStream<ChatChunk>(res)) {
+        for await (const chunk of ndjsonStream<LlmChunk>(res)) {
           if (chunk.error) throw new Error(chunk.error)
           if (!gotChunk) log.debug('ollama', `${body.model}: first chunk after ${Date.now() - t0} ms`)
           gotChunk = true
@@ -273,7 +278,7 @@ class OllamaClient {
         }
         return
       } catch (e) {
-        if (signal?.aborted) throw e
+        if (signal?.aborted || e instanceof CapabilityError) throw e
         // The connection to Ollama dropped before anything arrived: try once more.
         if (!ctrl.signal.aborted && !gotChunk && attempt === 0 && isRunnerCrash(String((e as Error)?.message ?? e))) {
           log.warn('ollama', `${body.model}: connection dropped before the answer started, retrying once`)
@@ -289,7 +294,9 @@ class OllamaClient {
           throw new Error(
             gotChunk
               ? `The model stopped responding (no output for ${mins(IDLE_MS)}). Try again, or pick a smaller model.`
-              : `The model did not start answering within ${mins(FIRST_CHUNK_MS)}. It may still be loading or the GPU may be full; try again (Settings → Engine has the time limits).`
+              : onCpu
+                ? `The model did not start answering within ${mins(FIRST_CHUNK_MS)}. On the processor a long conversation takes long to read: try a smaller model or a smaller context window, start a new chat, or raise the time limit in Settings → Engine.`
+                : `The model did not start answering within ${mins(FIRST_CHUNK_MS)}. It may still be loading or the GPU may be full; try again (Settings → Engine has the time limits).`
           )
         }
         throw e
@@ -304,14 +311,11 @@ class OllamaClient {
   }
 
   /** Non-streaming convenience call that returns the merged final message. */
-  async chatOnce(
-    body: ChatRequest,
-    signal?: AbortSignal
-  ): Promise<{ content: string; thinking: string; toolCalls: OllamaToolCall[]; final?: ChatChunk }> {
+  async chatOnce(body: LlmRequest, signal?: AbortSignal): Promise<LlmResult> {
     let content = ''
     let thinking = ''
-    const toolCalls: OllamaToolCall[] = []
-    let final: ChatChunk | undefined
+    const toolCalls: LlmResult['toolCalls'] = []
+    let final: LlmChunk | undefined
     for await (const c of this.chat(body, signal)) {
       if (c.message?.content) content += c.message.content
       if (c.message?.thinking) thinking += c.message.thinking
@@ -433,18 +437,69 @@ class OllamaClient {
     return join(homedir(), '.ollama', 'models')
   }
 
+  /** The `ollama serve` Maris started itself, where no tray or menu-bar app runs the server. */
+  private served?: number
+
+  /**
+   * Maris is closing: unload every model, so nothing of it stays in video memory, and, when asked, stop
+   * the Ollama server as well. Only a server on this computer is stopped, and on Linux only one that
+   * Maris started (the system service is the system's, and uses no video memory once its models are out).
+   */
+  async shutdown(stopServer: boolean, onlyOwn = false): Promise<void> {
+    // `onlyOwn`: just the models this copy of Maris loaded (another copy may be using the others).
+    const unload = (): Promise<unknown> => (onlyOwn ? Promise.all([...this.loadedWith.keys()].map((m) => this.unload(m))) : this.unloadAll())
+    if (await this.version()) await Promise.race([unload(), sleep(4000)])
+    if (!stopServer || !this.isLocal()) return
+    const run = (cmd: string, args: string[]): Promise<void> =>
+      new Promise((resolve) => {
+        try {
+          const p = spawn(cmd, args, { stdio: 'ignore', windowsHide: true })
+          p.on('error', () => resolve())
+          p.on('close', () => resolve())
+          setTimeout(resolve, 4000)
+        } catch {
+          resolve()
+        }
+      })
+    if (process.platform === 'win32') {
+      // The tray app first (it would start the server again), then the server and its model processes.
+      // (Tests name stand-in programs here, so they never stop the real Ollama of the computer they run on.)
+      const [trayApp, server] = (process.env.MARIS_TEST_OLLAMA_IMAGES ?? 'ollama app.exe;ollama.exe').split(';')
+      await run('taskkill', ['/F', '/IM', trayApp!])
+      await run('taskkill', ['/F', '/T', '/IM', server ?? 'ollama.exe'])
+    } else if (process.platform === 'darwin') {
+      await run('osascript', ['-e', 'if application "Ollama" is running then tell application "Ollama" to quit'])
+      if (this.served) await run('kill', [String(this.served)])
+    } else if (this.served) {
+      await run('kill', [String(this.served)])
+    }
+    this.served = undefined
+    log.info('ollama', 'stopped the Ollama server because Maris is closing')
+  }
+
+  /** The address in Settings points at this computer (only then is the server Maris's to start or stop). */
+  isLocal(): boolean {
+    return /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(this.base)
+  }
+
   /** Make sure the Ollama server answers; start it if it is installed but not running. */
   async ensureRunning(): Promise<boolean> {
     if (await this.version()) return true
+    // An Ollama on another computer cannot be started from here.
+    if (!this.isLocal()) return false
     const [appPath] = this.executablePaths()
     const cli = this.cliPath()
     try {
       if (process.platform === 'darwin' && existsSync(appPath)) {
         spawn('open', ['-g', '-a', appPath], { detached: true, stdio: 'ignore' }).unref()
+      } else if (cli) {
+        // The server by itself: no window and no tray icon appear, and Maris stops it again when it closes.
+        // (Ollama's own app opens its chat window when it is started, which is not what starting Maris should do.)
+        const p = spawn(cli, ['serve'], { detached: true, stdio: 'ignore', windowsHide: true })
+        this.served = p.pid
+        p.unref()
       } else if (process.platform === 'win32' && existsSync(appPath)) {
         spawn(appPath, [], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
-      } else if (cli) {
-        spawn(cli, ['serve'], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
       } else {
         return false
       }

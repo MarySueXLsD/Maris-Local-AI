@@ -54,24 +54,38 @@ export const isCatalogModel = (name: string): boolean => CATALOG.some((c) => c.n
 
 export const pulls = new Emitter<PullProgress>()
 const controllers = new Map<string, AbortController>()
+const running = new Map<string, Promise<void>>()
 
-export async function installModel(name: string): Promise<void> {
-  if (controllers.has(name)) return
+/** Names of the language models being downloaded now. */
+export const activeInstalls = (): string[] => [...controllers.keys()].map((n) => `llm:${n}`)
+
+/**
+ * Download a model. Asking twice for the same one (the setup assistant and the Models page at once)
+ * waits for the one download instead of reporting "done" while it is still going.
+ */
+export function installModel(name: string): Promise<void> {
+  const going = running.get(name)
+  if (going) return going
   const ctrl = new AbortController()
   controllers.set(name, ctrl)
-  try {
-    const entry = CATALOG.find((c) => c.name === name)
-    if (entry?.custom) {
-      await buildCustom(name, entry.custom, ctrl.signal)
-    } else {
-      await ollama.pull(name, (p) => pulls.emit(p), ctrl.signal)
+  const job = (async () => {
+    try {
+      const entry = CATALOG.find((c) => c.name === name)
+      if (entry?.custom) {
+        await buildCustom(name, entry.custom, ctrl.signal)
+      } else {
+        await ollama.pull(name, (p) => pulls.emit(p), ctrl.signal)
+      }
+    } catch (e) {
+      pulls.emit({ model: name, status: 'error', done: true, error: ctrl.signal.aborted ? 'Cancelled' : (e as Error).message })
+      throw e
+    } finally {
+      controllers.delete(name)
+      running.delete(name)
     }
-  } catch (e) {
-    pulls.emit({ model: name, status: 'error', done: true, error: ctrl.signal.aborted ? 'Cancelled' : (e as Error).message })
-    throw e
-  } finally {
-    controllers.delete(name)
-  }
+  })()
+  running.set(name, job)
+  return job
 }
 
 export function cancelInstall(name: string): void {

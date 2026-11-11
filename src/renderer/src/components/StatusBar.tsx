@@ -1,4 +1,4 @@
-import { Cpu, Gauge, MemoryStick, Power, ShieldCheck, Thermometer, Zap } from 'lucide-react'
+import { Cloud, Cpu, Feather, Gauge, MemoryStick, Power, ShieldCheck, Thermometer, Zap } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { api } from '../lib/api'
 import { gb, prettyModel } from '../lib/format'
@@ -77,6 +77,9 @@ function AutoApproveSeg() {
 export function StatusBar() {
   const s = useApp((st) => st.status)
   const show = useApp((st) => st.settings?.ui.status)
+  const apiModels = useApp((st) => st.models.filter((m) => m.provider && !m.capabilities.includes('embedding')).length)
+  const setView = useApp((st) => st.setView)
+  const openModels = useApp((st) => st.openModels)
   const [starting, setStarting] = useState(false)
   if (!s) return <footer className="h-7 shrink-0 border-t border-line bg-side" />
   const g = s.gpu
@@ -125,7 +128,25 @@ export function StatusBar() {
         </Seg>
       )}
       <span className="min-w-0 flex-1" />
-      {s.ollama.up ? (
+      {s.lite && (
+        <Seg
+          icon={<Feather size={12} aria-hidden />}
+          tip="Low-power mode is on: short instructions, only the tools a request needs and a plain interface, so a small model answers as quickly as this computer allows. Click to change it in Settings → Engine."
+          onClick={() => setView('settings')}
+        >
+          Low-power
+        </Seg>
+      )}
+      {!s.ollama.up && s.ollama.installed === false ? (
+        // No Ollama on this computer: fine when API models do the work, otherwise the place to start.
+        <Seg
+          icon={<Cloud size={12} aria-hidden />}
+          tip={apiModels ? 'No models run on this computer: answers come from the API services you added in Models → API.' : 'No model is set up yet. Run the setup assistant, or add an API key in Models → API.'}
+          onClick={() => openModels(apiModels ? 'api' : 'text')}
+        >
+          {apiModels ? `${apiModels} API model${apiModels === 1 ? '' : 's'}` : 'No models yet'}
+        </Seg>
+      ) : s.ollama.up ? (
         (show?.load !== false || show?.models !== false) && <Seg
           icon={<span className={cn('size-1.5 rounded-full', working ? 'animate-pulse bg-pollen' : loaded.length ? 'bg-petal' : 'bg-text-3')} aria-hidden />}
           tip={

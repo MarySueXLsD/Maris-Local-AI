@@ -51,13 +51,17 @@ const BLOCKED = new Set([
   // Ending programs on the computer needs someone at the computer.
   'system:endProgram',
   'skills:pickFolder',
+  // Keys for model services are entered at the computer, and so is where chats may be sent.
+  'providers:add',
+  'providers:edit',
+  'providers:remove',
   // The terminal command belongs to this computer.
   'cli:show',
   'cli:status',
   'cli:set'
 ])
 /** Channels that change this computer and follow "Approve changes from the phone". */
-const NEEDS_APPROVAL_RIGHT = new Set(['chat:approve', 'project:installToolchain'])
+const NEEDS_APPROVAL_RIGHT = new Set(['chat:approve', 'project:installToolchain', 'project:revert'])
 
 const MAX_BODY = 40 * 2 ** 20
 const MAX_MEDIA = 300 * 2 ** 20

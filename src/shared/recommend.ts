@@ -55,23 +55,65 @@ export interface Budget {
   perf: number
   /** CPU compute relative to the reference GPU. */
   cpuPerf: number
+  /** Processor cores, and how much work one core does per second (billions of model parameters). */
+  cores: number
+  corePower: number
+  /** A slow computer: one small model does everything (see isLitePc). */
+  lite: boolean
+}
+
+/**
+ * A computer where low-power mode helps: no graphics card that can run language models, and little
+ * memory, two cores, or an old processor without AVX2.
+ */
+export function isLitePc(scan: PcScan): boolean {
+  const g = scan.gpu
+  const gpuRuns = Boolean(g && g.llm !== 'none' && (g.unified ? g.vramMB >= 3000 : !g.integrated && g.vramMB >= 1800))
+  if (gpuRuns) return false
+  return scan.ram.totalMB < 12 * 1024 || scan.cpu.cores <= 2 || (scan.cpu.cores <= 4 && !scan.cpu.avx2)
 }
 
 export function budgetOf(scan: PcScan): Budget {
   const g = scan.gpu
-  const usable = Boolean(g && (g.unified ? g.vramMB >= 3000 : !g.integrated && g.vramMB >= 3500))
+  // Language models need less of a graphics card than pictures do: an old 2 GB card still runs a
+  // small model many times faster than the processor next to it.
+  const llmUsable = Boolean(g && (g.unified ? g.vramMB >= 3000 : !g.integrated && g.vramMB >= 1800))
+  const mediaUsable = Boolean(g && (g.unified ? g.vramMB >= 3000 : !g.integrated && g.vramMB >= 3500))
+  const ram = scan.ram.totalMB
   return {
-    llmGpu: usable && g!.llm !== 'none',
-    mediaGpu: usable && g!.comfy !== 'none',
+    llmGpu: llmUsable && g!.llm !== 'none',
+    mediaGpu: mediaUsable && g!.comfy !== 'none',
     unified: Boolean(g?.unified),
-    vramMB: usable ? Math.max(0, g!.vramMB * 0.94 - 400) : 0,
-    ramMB: Math.max(2048, scan.ram.totalMB * 0.78 - 2560),
-    vramGB: usable ? g!.vramMB / 1024 : 0,
+    vramMB: llmUsable ? Math.max(0, g!.vramMB * 0.94 - (g!.vramMB < 3500 ? 250 : 400)) : 0,
+    // What the system and other programs keep: about 2.5 GB on a roomy computer, less where there is
+    // little to begin with (an 8 GB computer rarely has more than 3.5 GB to spare, a 4 GB one about 1.4,
+    // and Maris's own window needs a few hundred MB of that).
+    ramMB: Math.max(900, ram * (ram <= 8704 ? 0.75 : 0.78) - (ram < 6144 ? 1700 : 2560)),
+    vramGB: llmUsable || mediaUsable ? g!.vramMB / 1024 : 0,
     gpuBW: g?.bandwidthGBs ?? 0,
-    cpuBW: Math.max(20, scan.ram.bandwidthGBs || 50),
-    perf: usable ? Math.max(0.03, g!.perf) : 0,
-    cpuPerf: Math.max(0.004, scan.cpu.cores * 0.004)
+    cpuBW: Math.max(6, scan.ram.bandwidthGBs || 38),
+    perf: mediaUsable ? Math.max(0.03, g!.perf) : 0,
+    cpuPerf: Math.max(0.004, scan.cpu.cores * 0.004),
+    cores: Math.max(1, scan.cpu.cores),
+    // Measured ballparks: about 11 billion parameters a second per core with AVX2, a little more with
+    // AVX-512, and under a third of that on processors from before 2013.
+    corePower: scan.cpu.avx512 ? 13 : scan.cpu.avx2 ? 11 : 3,
+    lite: isLitePc(scan)
   }
+}
+
+/**
+ * Tokens a second on the processor. Big models wait for memory (bandwidth); on old and small
+ * processors the arithmetic itself is the limit, which is why a 2012 laptop is much slower than its
+ * memory speed alone suggests.
+ */
+export function cpuTokensPerSec(m: CatalogModel, b: Budget): number {
+  const perTokGB = m.activeB && m.paramsB ? m.sizeGB * Math.min(1, (m.activeB / m.paramsB) * 1.15) : m.sizeGB
+  const byMemory = (CPU_EFF * b.cpuBW) / perTokGB
+  const params = m.activeB ?? m.paramsB ?? m.sizeGB / 0.62
+  // More than eight cores add little: memory is the limit by then.
+  const byCompute = (Math.min(b.cores, 8) * b.corePower) / Math.max(0.1, params)
+  return Math.min(byMemory, byCompute)
 }
 
 export function fmtDuration(sec: number): string {
@@ -88,7 +130,7 @@ export function llmPlacement(m: CatalogModel, b: Budget, processing: Processing,
   const sizeMB = m.sizeGB * MIB_PER_GB
   const needMB = Math.round(sizeMB + (m.kvPer16kMB ?? sizeMB * 0.06) * (ctx / 16384) + OVERHEAD_MB)
   const perTokGB = m.activeB && m.paramsB ? m.sizeGB * Math.min(1, (m.activeB / m.paramsB) * 1.15) : m.sizeGB
-  const cpuSpeed = (CPU_EFF * b.cpuBW) / perTokGB
+  const cpuSpeed = cpuTokensPerSec(m, b)
   if (forceCpu || processing === 'cpu' || !b.llmGpu) {
     const fits = needMB <= b.ramMB
     return { where: fits ? 'cpu' : 'none', gpuShare: 0, needMB, speedValue: cpuSpeed, speed: tokLabel(cpuSpeed), fits, note: fits ? undefined : 'Needs more memory than this PC can spare' }
@@ -98,7 +140,7 @@ export function llmPlacement(m: CatalogModel, b: Budget, processing: Processing,
     return { where: 'gpu', gpuShare: 1, needMB, speedValue: gpuSpeed, speed: tokLabel(gpuSpeed), fits: true }
   }
   const share = Math.max(0, Math.min(1, b.vramMB / needMB))
-  const t = (perTokGB * share) / (GPU_EFF * b.gpuBW) + (perTokGB * (1 - share)) / (CPU_EFF * b.cpuBW)
+  const t = share / gpuSpeed + (1 - share) / cpuSpeed
   const speed = 1 / t
   const roomy = b.unified ? needMB <= b.ramMB : needMB - b.vramMB <= b.ramMB
   if (!roomy) return { where: 'none', gpuShare: share, needMB, speedValue: speed, speed: tokLabel(speed), fits: false, note: 'Too large for this GPU and RAM together' }
@@ -113,19 +155,24 @@ export function llmPlacement(m: CatalogModel, b: Budget, processing: Processing,
   }
 }
 
+/** Room for a picture model in system memory when there is no graphics card for it (8 GB computers and up). */
+export const cpuMediaRoom = (b: Budget): boolean => b.ramMB >= 3000
+
 /** Where an image/video pack would run and how long one result takes. */
 export function mediaPlacement(p: MediaPack, b: Budget, processing: Processing): Placement {
   const needMB = Math.round(p.vramGB * 1024)
   if (processing === 'cpu' || !b.mediaGpu) {
     const sec = p.refSeconds / b.cpuPerf
+    // On the processor the whole picture model sits in system memory, next to everything else.
+    const ok = p.cpuOk && cpuMediaRoom(b)
     return {
-      where: p.cpuOk ? 'cpu' : 'none',
+      where: ok ? 'cpu' : 'none',
       gpuShare: 0,
       needMB,
       speedValue: sec,
-      speed: p.cpuOk ? `≈${fmtDuration(sec)} per ${p.unit}` : 'Needs a graphics card',
-      fits: p.cpuOk,
-      note: p.cpuOk ? 'Runs on the CPU' : 'Not practical without a supported GPU'
+      speed: ok ? `≈${fmtDuration(sec)} per ${p.unit}` : p.cpuOk ? 'Needs about 8 GB of memory' : 'Needs a graphics card',
+      fits: ok,
+      note: ok ? 'Runs on the CPU' : p.cpuOk ? 'Not enough memory to make pictures on the processor' : 'Not practical without a supported GPU'
     }
   }
   const gpuSec = p.refSeconds / b.perf
@@ -182,7 +229,8 @@ export function defaultPrefs(scan: PcScan, dataDir: string): SetupPrefs {
   const b = budgetOf(scan)
   return {
     processing: b.llmGpu ? 'gpu' : 'cpu',
-    images: true,
+    // Without a graphics card pictures are made in system memory: not offered where there is too little.
+    images: b.mediaGpu || cpuMediaRoom(b),
     video: b.mediaGpu && b.vramGB >= 5.5,
     dataDir
   }
@@ -222,15 +270,23 @@ export function makePlan(input: PlanInput): SetupPlan {
   const items: PlanItem[] = []
 
   // ------------------------------------------------------------- language models
+  // A slow computer reads its prompt slowly and has little memory for the window: 8K, or 4K under 6 GB.
+  // The window is not shrunk to squeeze a bigger model in: a model that only just fits pushes the rest
+  // of the system into the swap file, and then everything crawls.
+  const liteCtx = scan.ram.totalMB < 6144 ? [4096] : [8192]
   const score = (m: CatalogModel, role: LlmRole): Scored => {
-    const forceCpu = role === 'tiny' || role === 'embed'
-    let place = llmPlacement(m, b, processing, CTX_TRY[role][0], forceCpu)
-    let ctx = CTX_TRY[role][0]
-    if (!forceCpu && place.where !== 'gpu') {
-      // Prefer a smaller window that keeps the whole model on the GPU.
-      for (const c of CTX_TRY[role].slice(1)) {
+    // The helper and the memory search stay off the graphics card, except where one small model does
+    // everything: then it is that same model, wherever it runs.
+    const forceCpu = (role === 'tiny' || role === 'embed') && !b.lite
+    const tries = b.lite && role !== 'embed' ? liteCtx : CTX_TRY[role]
+    let place = llmPlacement(m, b, processing, tries[0], forceCpu)
+    let ctx = tries[0]
+    const better = (p: Placement): boolean => (processing === 'cpu' ? p.fits && !place.fits : p.where === 'gpu')
+    if (!forceCpu && (processing === 'cpu' ? !place.fits : place.where !== 'gpu')) {
+      // Prefer a smaller window that keeps the whole model on the GPU (or, without one, in memory at all).
+      for (const c of tries.slice(1)) {
         const p = llmPlacement(m, b, processing, c)
-        if (p.where === 'gpu') {
+        if (better(p)) {
           place = p
           ctx = c
           break
@@ -259,38 +315,79 @@ export function makePlan(input: PlanInput): SetupPlan {
       .filter((m) => (role === 'embed' ? m.caps?.includes('embedding') : !m.caps?.includes('embedding')) && (m.roles?.includes(role) ?? m.tier === role))
       .filter((m) => !(m.minVramGB && b.vramGB < m.minVramGB) && !(m.maxVramGB && b.vramGB > m.maxVramGB))
       .map((m) => score(m, role))
-  const usable = (s: Scored, role: LlmRole): boolean => s.place.fits && s.place.speedValue >= MIN_SPEED[speedKey][role]
+  // The small and older models are offered everywhere but picked by themselves only where nothing bigger runs well.
+  const usable = (s: Scored, role: LlmRole): boolean => s.place.fits && s.place.speedValue >= MIN_SPEED[speedKey][role] && !s.m.light
   const best = (list: Scored[]): Scored | undefined => [...list].sort((x, y) => y.utility - x.utility)[0]
 
-  const picked: Partial<Record<LlmRole, Scored>> = {}
-  const choose = (role: LlmRole, pool: Scored[], auto: () => Scored | undefined): Scored | undefined => {
-    const o = overrides[role]
-    if (o === null) return undefined
-    if (o) {
-      const m = llms.find((x) => x.name === o)
-      if (m) return score(m, role)
+  /**
+   * When nothing made for a role runs acceptably: the most capable model of all that still keeps a
+   * usable pace. A model that crawls is worse than a smaller one that answers.
+   */
+  const anyThatRuns = (role: LlmRole): Scored | undefined => {
+    // Between two small models of about the same ability, the one with tool calling of its own does
+    // more in Maris (the other is given its tools as text, which works but is less sure-footed).
+    const rate = (s: Scored): number => (role === 'code' ? (s.m.coding ?? s.m.quality ?? 0) : (s.m.quality ?? 0)) + (s.m.caps?.includes('tools') ? 4 : 0)
+    const fit = llms.filter((m) => !m.caps?.includes('embedding')).map((m) => score(m, role)).filter((s) => s.place.fits)
+    for (const floor of processing === 'cpu' ? [6, 4, 2.5, 1.2, 0] : [15, 6, 2.5, 0]) {
+      const ok = fit.filter((s) => s.place.speedValue >= floor)
+      if (ok.length) return ok.sort((x, y) => rate(y) - rate(x) || y.place.speedValue - x.place.speedValue)[0]
     }
-    return auto() ?? best(pool.filter((s) => s.place.fits))
+    return undefined
+  }
+
+  const picked: Partial<Record<LlmRole, Scored>> = {}
+  /** The person's own pick for a role: a model, "leave it out" (null), or nothing said (undefined). */
+  const chosen = (role: LlmRole): Scored | null | undefined => {
+    const o = overrides[role]
+    if (o === null) return null
+    const m = o ? llms.find((x) => x.name === o) : undefined
+    return m ? score(m, role) : undefined
+  }
+  const choose = (role: LlmRole, pool: Scored[], auto: () => Scored | undefined): Scored | undefined => {
+    const own = chosen(role)
+    if (own !== undefined) return own ?? undefined
+    // Without a graphics card a model that merely fits may crawl: anyThatRuns picks by pace instead.
+    return auto() ?? (processing === 'cpu' ? undefined : best(pool.filter((s) => s.place.fits && !s.m.light)))
   }
 
   const maxPool = candidates('max')
-  picked.max = choose('max', maxPool, () => best(maxPool.filter((s) => usable(s, 'max'))))
-  const maxSize = picked.max?.m.sizeGB ?? Infinity
-  // On the CPU, Balanced should load quickly and leave room in RAM for the helper models.
-  const balCap = processing === 'cpu' ? Math.min(maxSize * 0.75, (b.ramMB / 1024) * 0.4) : maxSize * 0.75
   const balPool = candidates('balanced')
-  picked.balanced = choose('balanced', balPool, () =>
-    best(balPool.filter((s) => usable(s, 'balanced') && s.m.sizeGB <= balCap && (s.m.quality ?? 0) <= (picked.max?.m.quality ?? 100)))
-  ) ?? picked.max
-  const balSize = picked.balanced?.m.sizeGB ?? maxSize
   const fastPool = candidates('fast')
-  picked.fast = choose('fast', fastPool, () => best(fastPool.filter((s) => usable(s, 'fast') && s.m.sizeGB <= Math.max(1.5, balSize * 0.85)))) ?? picked.balanced
   const codePool = candidates('code')
-  picked.code = choose('code', codePool, () => best(codePool.filter((s) => usable(s, 'code'))))
   const tinyPool = candidates('tiny')
-  picked.tiny = choose('tiny', tinyPool, () => [...tinyPool].filter((s) => s.place.fits).sort((x, y) => x.m.sizeGB - y.m.sizeGB || y.utility - x.utility)[0])
   const embedPool = candidates('embed')
-  picked.embed = choose('embed', embedPool, () => best(embedPool.filter((s) => s.place.fits)))
+  if (b.lite) {
+    // A slow computer: one small model does everything, so nothing is swapped in and out of memory
+    // and only one model is ever loaded.
+    const own = chosen('max')
+    const one = own === undefined ? anyThatRuns('max') : (own ?? undefined)
+    const same = (role: LlmRole): Scored | undefined => {
+      const o = chosen(role)
+      return o === undefined ? one : (o ?? undefined)
+    }
+    picked.max = one
+    picked.balanced = same('balanced') ?? one
+    picked.fast = same('fast') ?? picked.balanced
+    picked.tiny = same('tiny')
+    picked.code = chosen('code') ?? undefined
+    // Memory search by meaning costs a second model in memory: a 46 MB one where there is room, none otherwise.
+    const smallEmbed = [...embedPool].filter((s) => s.place.fits).sort((x, y) => x.m.sizeGB - y.m.sizeGB)[0]
+    const e = chosen('embed')
+    picked.embed = e === undefined ? (scan.ram.totalMB >= 5632 ? smallEmbed : undefined) : (e ?? undefined)
+  } else {
+    picked.max = choose('max', maxPool, () => best(maxPool.filter((s) => usable(s, 'max')))) ?? (chosen('max') === null ? undefined : anyThatRuns('max'))
+    const maxSize = picked.max?.m.sizeGB ?? Infinity
+    // On the CPU, Balanced should load quickly and leave room in RAM for the helper models.
+    const balCap = processing === 'cpu' ? Math.min(maxSize * 0.75, (b.ramMB / 1024) * 0.4) : maxSize * 0.75
+    picked.balanced =
+      choose('balanced', balPool, () => best(balPool.filter((s) => usable(s, 'balanced') && s.m.sizeGB <= balCap && (s.m.quality ?? 0) <= (picked.max?.m.quality ?? 100)))) ?? picked.max
+    const balSize = picked.balanced?.m.sizeGB ?? maxSize
+    picked.fast = choose('fast', fastPool, () => best(fastPool.filter((s) => usable(s, 'fast') && s.m.sizeGB <= Math.max(1.5, balSize * 0.85)))) ?? picked.balanced
+    picked.code = choose('code', codePool, () => best(codePool.filter((s) => usable(s, 'code'))))
+    const smallest = (list: Scored[]): Scored | undefined => [...list].filter((s) => s.place.fits).sort((x, y) => x.m.sizeGB - y.m.sizeGB || y.utility - x.utility)[0]
+    picked.tiny = choose('tiny', tinyPool, () => smallest(tinyPool.filter((s) => !s.m.light)) ?? smallest(tinyPool))
+    picked.embed = choose('embed', embedPool, () => best(embedPool.filter((s) => s.place.fits && !s.m.light)) ?? best(embedPool.filter((s) => s.place.fits)))
+  }
 
   // Code mode falls back to Max when Max is also the best coder, or so close that a separate download
   // is not worth it (the "Code" slot then stays empty).
@@ -307,9 +404,17 @@ export function makePlan(input: PlanInput): SetupPlan {
   const reasonFor = (role: LlmRole, s?: Scored): string => {
     if (!s) {
       if (role === 'code') return codeSameAsMax ? 'Max is also the best coder that fits, so Code mode uses it.' : 'Code mode will use the Max model.'
+      if (role === 'embed' && b.lite) return 'Memory search matches words here, which needs no extra model in memory.'
       return 'Nothing in the catalog fits this role on this PC.'
     }
     const p = s.place
+    if (b.lite && role !== 'embed') {
+      const pace = `${p.speed} on the ${scan.cpu.cores}-core processor with a ${s.ctx / 1024}K context`
+      if (role === 'max' || s.m.name !== picked.max?.m.name) return `${pace}: the most capable model that still answers at a usable pace on this computer.`
+      return role === 'tiny'
+        ? 'The same model also does the small helper jobs, so only one model is ever in memory.'
+        : 'The same model as Max: with one model for everything, nothing has to be loaded in between.'
+    }
     const where =
       p.where === 'gpu'
         ? `Fits fully on ${gpuName}`
@@ -330,10 +435,11 @@ export function makePlan(input: PlanInput): SetupPlan {
     return `${where}${ctxNote}: ${why[role]}.`
   }
 
+  // On a slow computer every role offers every chat model, smallest worries first: what fits, then quality.
+  const everyChat = b.lite ? llms.filter((m) => !m.caps?.includes('embedding')) : []
   for (const role of LLM_ROLES) {
-    const pool = (role === 'tiny' ? tinyPool : role === 'embed' ? embedPool : role === 'code' ? codePool : role === 'max' ? maxPool : role === 'balanced' ? balPool : fastPool)
-      .slice()
-      .sort((x, y) => Number(y.place.fits) - Number(x.place.fits) || y.utility - x.utility)
+    const own = role === 'tiny' ? tinyPool : role === 'embed' ? embedPool : role === 'code' ? codePool : role === 'max' ? maxPool : role === 'balanced' ? balPool : fastPool
+    const pool = (b.lite && role !== 'embed' ? everyChat.map((m) => score(m, role)) : own.slice()).sort((x, y) => Number(y.place.fits) - Number(x.place.fits) || y.utility - x.utility)
     const s = picked[role]
     // Make sure an override that is not in the role's pool still shows up as an option.
     if (s && !pool.some((x) => x.m.name === s.m.name)) pool.unshift(s)
@@ -436,6 +542,11 @@ export function makePlan(input: PlanInput): SetupPlan {
       scan.gpu?.integrated || !scan.gpu
         ? 'No dedicated graphics card was found, so language models run on the CPU. Answers will be slower.'
         : `${scan.gpu.name} is not supported for language models yet, so they run on the CPU.`
+    )
+  }
+  if (b.lite) {
+    warnings.push(
+      'This computer is on the slow side for AI, so Maris uses low-power mode: one small model for everything, short instructions and a lighter interface. For quicker, smarter answers you can also add a cloud model with an API key in Models → API.'
     )
   }
   if (scan.gpu?.vendor === 'amd' || scan.gpu?.vendor === 'intel') {

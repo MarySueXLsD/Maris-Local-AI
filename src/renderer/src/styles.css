@@ -597,6 +597,38 @@ textarea[aria-label='Message Maris']:focus-visible {
   animation: none !important;
   transition: none !important;
 }
+
+/* Low-power mode (Settings → Engine): on a slow computer the model needs every core, so the window
+   stays still. No blur behind panels, no glow, no moving gradients, flat shadows; the spinner and the
+   text caret keep working (they are the only signs of life while a slow model reads). */
+[data-lite] {
+  --shadow: 0 0 0 1px var(--line-strong);
+}
+[data-lite] * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  text-shadow: none !important;
+}
+[data-lite] .live {
+  animation: none;
+  background: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  color: var(--pollen);
+  filter: none;
+}
+[data-lite] .bloom .cart,
+[data-lite] .bloom .seal {
+  animation: none;
+}
+[data-lite] .animate-pulse {
+  animation: none;
+}
+[data-lite] *,
+[data-lite] *::before,
+[data-lite] *::after {
+  transition-duration: 0s !important;
+}
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

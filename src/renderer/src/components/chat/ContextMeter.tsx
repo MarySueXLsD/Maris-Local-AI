@@ -1,6 +1,7 @@
 import { Minimize2 } from 'lucide-react'
 import { Popover } from 'radix-ui'
 import { useCallback, useEffect, useState } from 'react'
+import { contextLabel } from '@shared/context'
 import { patchFor } from '@shared/defaults'
 import type { ContextSizeOption, ContextSizes, ContextUsage } from '@shared/types'
 import { api } from '../../lib/api'
@@ -23,27 +24,35 @@ const COLORS: Record<string, string> = {
   pictures: '#cf68cc'
 }
 
-/** Window sizes as the settings name them: 32768 → 32K. */
-const kb = (n: number): string => (n % 1024 === 0 ? `${n / 1024}K` : k(n))
+/** Window sizes as the settings name them: 32768 → 32K, 1000000 → 1M. */
+const kb = contextLabel
 
+/** A token count: 950, 4.2K, 180K, 1.3M. */
 function k(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`
   return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}K` : String(n)
 }
 
 /** What a window size means and what it costs here, in words. */
 function sizeWords(o: ContextSizeOption): { amount: string; cost: string } {
   const words = Math.round((o.tokens * 0.75) / 1000) * 1000
-  const amount = `${kb(o.tokens)} tokens: about ${words.toLocaleString('en-US')} words, or ${Math.max(1, Math.round(words / 400))} pages of chat, code and tool results.`
+  const amount = `${kb(o.tokens)} tokens: about ${words.toLocaleString('en-US')} words, or ${Math.max(1, Math.round(words / 400)).toLocaleString('en-US')} pages of chat, code and tool results.`
   const cost =
     o.fit === 'gpu'
       ? 'Fits in video memory together with the model: full speed.'
       : o.fit === 'cpu'
         ? 'The model runs on the processor: a bigger window mainly makes reading long prompts slower.'
-        : `About ${((o.spillMB ?? 0) / 1024).toFixed(1)} GB would not fit in video memory and runs from system memory: writing about ${o.slower}× slower.`
+        : o.fit === 'api'
+          ? o.tokens >= 400000
+            ? 'The model runs at an API service: this is how much of a long chat is sent with each message before older messages are summarised. A window this full is sent again with every message, and the service bills for all of it (less for what it has cached), so a long chat gets expensive.'
+            : 'The model runs at an API service: this is how much of a long chat is sent with each message before older messages are summarised. More keeps more in view and costs more per message.'
+          : o.fit === 'none'
+            ? `Model and window together need about ${Math.round((o.needMB ?? 0) / 1024)} GB of memory, which is more than this computer has.`
+            : `About ${((o.spillMB ?? 0) / 1024).toFixed(1)} GB would not fit in video memory and runs from system memory: writing about ${o.slower}× slower.`
   return { amount, cost }
 }
 
-const FIT_DOT: Record<ContextSizeOption['fit'], string> = { gpu: 'bg-ok', spill: 'bg-pollen', cpu: 'bg-text-3' }
+const FIT_DOT: Record<ContextSizeOption['fit'], string> = { gpu: 'bg-ok', spill: 'bg-pollen', cpu: 'bg-text-3', api: 'bg-petal', none: 'bg-danger' }
 
 /** Pick the window size for this chat's model role, with what each size means for speed on this computer. */
 function SizePicker({ sizes, onPick }: { sizes: ContextSizes; onPick: (tokens: number) => void }) {
@@ -63,13 +72,16 @@ function SizePicker({ sizes, onPick }: { sizes: ContextSizes; onPick: (tokens: n
             key={o.tokens}
             role="radio"
             aria-checked={o.tokens === sizes.current}
+            // Too big for this computer: it stays readable (hover says why) but cannot be picked.
+            aria-disabled={o.fit === 'none' || undefined}
             onMouseEnter={() => setShown(o.tokens)}
             onFocus={() => setShown(o.tokens)}
             onBlur={() => setShown(undefined)}
-            onClick={() => onPick(o.tokens)}
+            onClick={() => o.fit !== 'none' && onPick(o.tokens)}
             className={cn(
               'tabular inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.8rem] transition-colors',
-              o.tokens === sizes.current ? 'border-petal bg-petal-soft font-medium text-text' : 'border-line text-text-2 hover:border-line-strong hover:text-text'
+              o.tokens === sizes.current ? 'border-petal bg-petal-soft font-medium text-text' : 'border-line text-text-2 hover:border-line-strong hover:text-text',
+              o.fit === 'none' && o.tokens !== sizes.current && 'cursor-not-allowed opacity-55 hover:border-line hover:text-text-2'
             )}
           >
             <span className={cn('size-1.5 rounded-full', FIT_DOT[o.fit])} aria-hidden />
@@ -78,11 +90,13 @@ function SizePicker({ sizes, onPick }: { sizes: ContextSizes; onPick: (tokens: n
         ))}
       </div>
       <p className="mt-2 text-[0.78rem] leading-snug text-text" aria-live="polite">
-        {w.amount} <span className={focus.fit === 'spill' ? 'text-pollen' : 'text-text-2'}>{w.cost}</span>
+        {w.amount} <span className={focus.fit === 'spill' ? 'text-pollen' : focus.fit === 'none' ? 'text-danger' : 'text-text-2'}>{w.cost}</span>
       </p>
       <p className="mt-1.5 text-[0.74rem] leading-snug text-text-3">
-        A bigger window keeps more of the conversation, files and results in view before older messages are summarised. It needs more memory, and every step takes longer to read.
-        {sizes.max ? ` This model can use up to ${kb(sizes.max)}.` : ''}
+        {focus.fit === 'api'
+          ? 'A bigger window keeps more of the conversation, files and results in view before older messages are summarised.'
+          : 'A bigger window keeps more of the conversation, files and results in view before older messages are summarised. It needs more memory, and every step takes longer to read.'}
+        {sizes.max ? ` This model can use up to ${kb(sizes.max)}${focus.fit === 'api' ? '; Maris stays a little under that, because its token counts are estimates' : ''}.` : ''}
       </p>
     </div>
   )

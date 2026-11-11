@@ -118,6 +118,7 @@ export function Composer({ conversationId, extraAttachments, onConsumed }: { con
   const pending = Object.values(approvals).filter((a) => a.conversationId === conversationId)
   const autoApprove = useAutoApprove(conversationId)
   const hasModels = useApp((s) => s.models.some((m) => !m.capabilities.includes('embedding')))
+  const models = useApp((s) => s.models)
   const status = useApp((s) => s.status)
   const mode = useApp((s) => s.mode)
   const project = useApp((s) => s.project)
@@ -286,17 +287,23 @@ export function Composer({ conversationId, extraAttachments, onConsumed }: { con
 
   const job = status?.comfy.job
   const left = job?.etaSec ? ` · about ${job.etaSec < 90 ? `${Math.max(1, job.etaSec)} s` : `${Math.round(job.etaSec / 60)} min`} left` : ''
+  // A model at an API service does not care how busy this computer is.
+  const awayChat = model !== 'auto' ? models.find((m) => m.name === model)?.remote === true : Boolean(preview?.provider && preview.remote !== false)
   const busyWord = job
-    ? `${job.kind === 'video' ? 'Rendering a video' : 'Drawing a picture'}${job.model ? ` with ${job.model}` : ''}${left}; chats run on the processor meanwhile`
-    : status?.busy === 'heavy'
-      ? 'Another program is using the graphics card heavily'
-      : status?.busy === 'busy'
-        ? `Your ${DEVICE} is busy`
-        : ''
+    ? `${job.kind === 'video' ? 'Rendering a video' : 'Drawing a picture'}${job.model ? ` with ${job.model}` : ''}${left}${awayChat ? '' : '; chats run on the processor meanwhile'}`
+    : awayChat
+      ? ''
+      : status?.busy === 'heavy'
+        ? status.gpu && settings?.engine.processing !== 'cpu'
+          ? 'Another program is using the graphics card heavily'
+          : 'Other programs are keeping the processor busy'
+        : status?.busy === 'busy'
+          ? `Your ${DEVICE} is busy`
+          : ''
   const jobElsewhere = job?.conversationId && job.conversationId !== conversationId ? job.conversationId : undefined
 
   const placeholder = !hasModels && !media
-    ? 'Install a model in Models to start chatting'
+    ? 'Install a model or add an API key in Models to start chatting'
     : kind === 'image'
       ? 'Describe the picture: subject, setting, style, light, camera…'
       : kind === 'video'
@@ -509,9 +516,10 @@ export function Composer({ conversationId, extraAttachments, onConsumed }: { con
         ) : preview && !running ? (
           <Tip label={preview.reason}>
             <span tabIndex={0}>
-              {preview.auto ? 'Auto will answer with' : 'Answering with'} <span className="text-text-2">{prettyModel(preview.model)}</span>
+              {preview.auto ? 'Auto will answer with' : 'Answering with'} <span className="text-text-2">{models.find((m) => m.name === preview.model)?.label ?? prettyModel(preview.model)}</span>
               {preview.think ? ', thinking first' : ''}
               {preview.cpuOnly ? ', on the CPU' : ''}
+              {preview.provider && preview.remote !== false ? <span className="text-pollen">, sent to {preview.provider}</span> : ''}
             </span>
           </Tip>
         ) : (

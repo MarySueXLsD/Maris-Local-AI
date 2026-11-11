@@ -33,10 +33,13 @@ import { learner } from './memory/learner'
 import { memory } from './memory/store'
 import { dbPath, ensureDir, userDir } from './paths'
 import { IS_MAC, IS_WIN } from './platform'
+import { isLite } from './perf'
+import { isClosed, isClosing, requestQuit, setQuitHooks } from './quit'
 import { settings } from './settings'
 import { monitor } from './system/monitor'
-import { processes } from './tools/processes'
 import { log } from './util'
+import { agent } from './agent/agent'
+import { providers } from './engines/providers'
 import { themeScheme } from '@shared/themes'
 
 // Tests (and power users) can point Maris at a separate profile folder.
@@ -48,8 +51,25 @@ protocol.registerSchemesAsPrivileged([
 
 let win: BrowserWindow | undefined
 let tray: Tray | undefined
-let quitting = false
 let trayHintShown = false
+let freeTimer: NodeJS.Timeout | undefined
+
+/**
+ * Maris stays in the tray with its window closed: after a minute without work, let go of the graphics
+ * card's memory (models load again the next time they are needed).
+ */
+function freeGpuWhileHidden(): void {
+  clearTimeout(freeTimer)
+  freeTimer = setTimeout(() => {
+    const hidden = !win || win.isDestroyed() || !win.isVisible()
+    const idle = agent.runningIds().length === 0 && media.activeCount === 0 && media.queuedCount === 0 && Date.now() - ollama.lastActiveAt > 45000
+    if (!hidden || isClosing()) return
+    if (!idle) return freeGpuWhileHidden()
+    log.info('main', 'the window has been closed for a while: freeing video memory')
+    void ollama.unloadAll()
+    if (comfy.isUp()) void comfy.free()
+  }, 60000)
+}
 
 const resource = (name: string): string =>
   app.isPackaged ? path.join(process.resourcesPath, name) : path.join(__dirname, '../../resources', name)
@@ -130,7 +150,8 @@ function vibrancyOf(m: 'mica' | 'acrylic' | 'solid'): 'under-window' | 'hud' | n
 
 /** Window frame per system: macOS keeps its traffic lights (inset), Windows and Linux draw caption buttons over the page. */
 function chromeOptions(): Electron.BrowserWindowConstructorOptions {
-  const material = settings.get().ui.material
+  // Low-power mode: a solid window, which an old graphics chip draws without effort.
+  const material = isLite() ? 'solid' : settings.get().ui.material
   if (IS_MAC) {
     const vibrancy = vibrancyOf(material)
     return {
@@ -168,14 +189,7 @@ function setAppMenu(): void {
           { role: 'hideOthers' },
           { role: 'unhide' },
           { type: 'separator' },
-          {
-            label: 'Quit Maris',
-            accelerator: 'Command+Q',
-            click: () => {
-              quitting = true
-              app.quit()
-            }
-          }
+          { label: 'Quit Maris', accelerator: 'Command+Q', click: () => void requestQuit() }
         ]
       },
       {
@@ -235,6 +249,8 @@ function openProjectFromShell(dir: string): void {
 
 function showWindow(): void {
   startHidden = false
+  clearTimeout(freeTimer)
+  if (isClosing()) return
   if (!win || win.isDestroyed()) createWindow()
   if (!win) return
   if (win.isMinimized()) win.restore()
@@ -275,15 +291,24 @@ function createWindow(): void {
     }
   })
   win.on('close', (e) => {
-    if (!quitting && settings.get().ui.closeToTray) {
-      e.preventDefault()
+    // Maris is on its way out: let the window go.
+    if (isClosing()) return
+    e.preventDefault()
+    const stay = settings.get().ui.closeToTray
+    // macOS apps stay in the Dock when their window closes; ⌘Q closes Maris.
+    if (stay || IS_MAC) {
       win?.hide()
-      if (!trayHintShown && Notification.isSupported()) {
+      freeGpuWhileHidden()
+      if (stay && !trayHintShown && Notification.isSupported()) {
         trayHintShown = true
         const where = IS_MAC ? 'the menu bar' : 'the tray'
-        new Notification({ title: 'Maris is still running', body: `Find it in ${where}, or press ${settings.get().ui.hotkey}.`, silent: true }).show()
+        new Notification({ title: 'Maris is still running', body: `Find it in ${where}, or press ${settings.get().ui.hotkey}. It frees the graphics card's memory while its window is closed.`, silent: true }).show()
       }
+      return
     }
+    // Closing the window closes Maris: ask first if something is still going on, then stop everything
+    // and hand the graphics card's memory back.
+    void requestQuit()
   })
   win.on('focus', () => win?.flashFrame(false))
   if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -316,13 +341,7 @@ function createTray(): void {
         }
       },
       { type: 'separator' },
-      {
-        label: 'Quit Maris',
-        click: () => {
-          quitting = true
-          app.quit()
-        }
-      }
+      { label: 'Quit Maris', click: () => void requestQuit() }
     ])
   )
   // macOS opens the menu on click; Windows and Linux toggle the window and open the menu on right-click.
@@ -378,6 +397,17 @@ if (!gotLock) {
     nativeTheme.themeSource = themeScheme(cfg.ui.palette, cfg.ui.customTheme, cfg.ui.theme)
     registerMediaProtocol()
     registerIpc()
+    setQuitHooks({
+      window: () => win,
+      closing: () => {
+        clearTimeout(freeTimer)
+        // Out of sight at once; the engines are stopped behind the scenes.
+        if (win && !win.isDestroyed()) win.hide()
+        tray?.destroy()
+        tray = undefined
+        globalShortcut.unregisterAll()
+      }
+    })
     link.apply()
     cliServer.onShow = (id) => {
       showWindow()
@@ -388,7 +418,11 @@ if (!gotLock) {
     feed.start({ justUpdated: process.argv.includes('--updated') })
     connectors.startAll()
     void skills.cleanLeftovers()
-    monitor.start(Math.max(1, cfg.system.monitorIntervalSec) * 1000)
+    // A slow computer samples its load less often: every reading costs it a little of the model's time.
+    const monitorMs = (s: typeof cfg): number => Math.max(isLite(s) ? 5 : 1, s.system.monitorIntervalSec) * 1000
+    monitor.start(monitorMs(cfg))
+    // New models of the API services show up by themselves: their lists are read again about once a day.
+    setTimeout(() => providers.refreshStale(), 25000)
     setAppMenu()
     createWindow()
     createTray()
@@ -440,16 +474,16 @@ if (!gotLock) {
         lastLink = { ...s.link }
         link.apply()
       }
-      if (s.system.monitorIntervalSec !== lastInterval) {
-        lastInterval = s.system.monitorIntervalSec
-        monitor.restart(Math.max(1, lastInterval) * 1000)
+      if (monitorMs(s) !== lastInterval) {
+        lastInterval = monitorMs(s)
+        monitor.restart(lastInterval)
       }
     })
     let lastMaterial = cfg.ui.material
     let lastLink = { ...cfg.link }
     let lastUpdates = { ...cfg.updates }
     let lastConnectors = cfg.extensions.connectors
-    let lastInterval = cfg.system.monitorIntervalSec
+    let lastInterval = monitorMs(cfg)
     nativeTheme.on('updated', () => {
       try {
         if (!IS_MAC) win?.setTitleBarOverlay(overlayColors())
@@ -467,15 +501,12 @@ if (!gotLock) {
     if (cfg.media.autoStart && comfy.isInstalled()) void comfy.start().catch((e) => log.warn('main', 'comfy autostart', e))
   })
 
-  app.on('before-quit', () => {
-    quitting = true
-    cliServer.stop()
-    learner.cancelAll()
-    processes.stopAll()
-    if (comfy.ownsProcess()) comfy.stop()
-    link.stop()
-    void connectors.stopAll()
-    monitor.stop()
+  // Every way out (the window's close button, the tray, ⌘Q, an update) goes through requestQuit, which
+  // asks when work is still going on and then stops the engines and frees the graphics card's memory.
+  app.on('before-quit', (e) => {
+    if (isClosed()) return
+    e.preventDefault()
+    void requestQuit()
   })
   app.on('will-quit', () => {
     globalShortcut.unregisterAll()
@@ -483,6 +514,6 @@ if (!gotLock) {
   })
   app.on('window-all-closed', () => {
     // macOS apps usually keep running in the Dock when their window closes.
-    if (!settings.get().ui.closeToTray && !IS_MAC) app.quit()
+    if (!settings.get().ui.closeToTray && !IS_MAC && !isClosing()) void requestQuit()
   })
 }

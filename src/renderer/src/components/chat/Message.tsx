@@ -1,23 +1,4 @@
-import {
-  Check,
-  ChevronRight,
-  Clapperboard,
-  Copy,
-  Cpu,
-  FileCode2,
-  FileText,
-  FolderOpen,
-  Gauge,
-  Image as ImageIcon,
-  ImagePlay,
-  Mountain,
-  Pencil,
-  RefreshCw,
-  Sparkles,
-  ThumbsDown,
-  ThumbsUp,
-  Zap
-} from 'lucide-react'
+import { Check, ChevronRight, Clapperboard, Cloud, Copy, Cpu, FileCode2, FileText, FolderOpen, Gauge, Image as ImageIcon, ImagePlay, Mountain, Pencil, RefreshCw, Sparkles, ThumbsDown, ThumbsUp, Zap } from 'lucide-react'
 import { DropdownMenu, Popover } from 'radix-ui'
 import { memo, useEffect, useRef, useState } from 'react'
 import type { ApprovalRequest, ChatMessage, MediaResult, MessageActivity, Part, RouteDecision, Tier, ToolCallRecord } from '@shared/types'
@@ -30,6 +11,7 @@ import { Markdown } from '../Markdown'
 import { Button, cn, IconButton, inputCls, Spinner, Tip } from '../ui'
 import { ActivityGroup, TurnSummaryLine, WorkLog, type WorkItem } from './Activity'
 import { FullControlPrompt } from './FullControlPrompt'
+import { modelLabel } from './ModelPicker'
 import { ToolCard } from './ToolCard'
 
 const TIER_ICON: Record<string, typeof Zap> = { fast: Zap, balanced: Gauge, max: Mountain, tiny: Sparkles, custom: Sparkles }
@@ -37,7 +19,11 @@ const TIER_NAME: Record<string, string> = { fast: 'Fast', balanced: 'Balanced', 
 
 export function RouteChip({ route, model, live }: { route?: RouteDecision; model?: string; live?: boolean }) {
   const explain = useApp((s) => s.settings?.ui.showRouteReason ?? true)
+  const models = useApp((s) => s.models)
   if (!route && !model) return null
+  const name = modelLabel(route?.model ?? model, models)
+  // The answer came from a model at an API service: the chat was sent there.
+  const away = Boolean(route?.provider && route.remote !== false)
   // Pictures and videos from the message box's Image and Video modes: no language model, no context.
   const made = route?.category === 'media' && route.numCtx === 0
   const Icon = made ? ImagePlay : (TIER_ICON[route?.tier ?? 'custom'] ?? Sparkles)
@@ -45,11 +31,12 @@ export function RouteChip({ route, model, live }: { route?: RouteDecision; model
     <Tip
       label={
         <span className="block space-y-1">
-          <span className="block font-medium">{prettyModel(route?.model ?? model)}</span>
+          <span className="block font-medium">{name}</span>
           {explain && route?.reason && <span className="block text-text-2">{route.reason}</span>}
           {route && !made && (
             <span className="block text-text-3">
-              {route.think ? 'Thinking on' : 'Thinking off'}, {Math.round(route.numCtx / 1024)}K context{route.cpuOnly ? ', on the CPU' : ', on the GPU'}
+              {route.think ? 'Thinking on' : 'Thinking off'}, {Math.round(route.numCtx / 1024)}K context
+              {route.provider ? `, ${route.remote === false ? 'in' : 'at'} ${route.provider}` : route.cpuOnly ? ', on the CPU' : ', on the GPU'}
             </span>
           )}
           {made && <span className="block text-text-3">Made on your graphics card</span>}
@@ -65,7 +52,8 @@ export function RouteChip({ route, model, live }: { route?: RouteDecision; model
       >
         <Icon size={12} className={live ? 'text-pollen' : 'text-petal'} aria-hidden />
         <span>{made ? (route?.auto ? 'Auto' : 'Your pick') : route?.auto ? `Auto: ${TIER_NAME[route.tier]}` : TIER_NAME[route?.tier ?? 'custom']}</span>
-        <span className="text-text-3">{prettyModel(route?.model ?? model)}</span>
+        <span className="max-w-56 truncate text-text-3">{name}</span>
+        {away && <Cloud size={12} aria-label={`Answered at ${route?.provider}`} />}
         {route?.cpuOnly && <Cpu size={12} aria-label="Running on CPU" />}
       </span>
     </Tip>
@@ -255,15 +243,17 @@ function RegenerateMenu({ m }: { m: ChatMessage }) {
             const Icon = TIER_ICON[t]
             return (
               <DropdownMenu.Item key={t} className="menu-item" onSelect={() => void api.chat.regenerate(m.id, name)}>
-                <Icon size={14} /> {TIER_NAME[t]} <span className="ml-auto text-text-3">{prettyModel(name)}</span>
+                <Icon size={14} /> {TIER_NAME[t]} <span className="ml-auto max-w-40 truncate text-text-3">{modelLabel(name, models)}</span>
               </DropdownMenu.Item>
             )
           })}
           {chat
-            .filter((x) => !tiers.some((t) => settings?.tiers[t] === x.name) && x.name !== settings?.tiers.tiny)
+            .filter((x) => !tiers.some((t) => settings?.tiers[t] === x.name) && x.name !== settings?.tiers.tiny && x.name !== m.model)
             .map((x) => (
               <DropdownMenu.Item key={x.name} className="menu-item" onSelect={() => void api.chat.regenerate(m.id, x.name)}>
-                {prettyModel(x.name)}
+                {x.provider && x.remote !== false && <Cloud size={14} aria-hidden />}
+                <span className="min-w-0 flex-1 truncate">{x.label ?? prettyModel(x.name)}</span>
+                {x.provider && <span className="ml-auto text-[0.75rem] text-text-3">{x.providerName}</span>}
               </DropdownMenu.Item>
             ))}
         </DropdownMenu.Content>
@@ -427,6 +417,7 @@ function AssistantMessage({ m, approvals }: { m: ChatMessage; approvals: Approva
   const showThinking = useApp((s) => s.settings?.ui.showThinking ?? true)
   const simple = useApp((s) => (s.settings?.ui.activityView ?? 'simple') === 'simple')
   const codeChat = useApp((s) => s.conversations.find((c) => c.id === m.conversationId)?.mode === 'code')
+  const models = useApp((s) => s.models)
   const live = m.status === 'streaming' || m.status === 'waiting'
   const lastTextIdx = m.parts.map((p) => p.type).lastIndexOf('text')
   const text = m.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n\n')
@@ -473,7 +464,7 @@ function AssistantMessage({ m, approvals }: { m: ChatMessage; approvals: Approva
           <NextStepIndicator since={m.activity.since} activity={m.activity} />
         ) : (
           <div className="flex items-center gap-2 py-1 text-[0.9rem]">
-            <span className="live">{m.route ? `${prettyModel(m.route.model)} is getting ready…` : 'Choosing a model…'}</span>
+            <span className="live">{m.route ? `${modelLabel(m.route.model, models)} is getting ready…` : 'Choosing a model…'}</span>
           </div>
         ))}
       {/* The detailed view already streams the thinking itself. */}

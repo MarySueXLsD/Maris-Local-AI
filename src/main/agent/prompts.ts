@@ -6,10 +6,23 @@ import type { RouteDecision, Settings } from '@shared/types'
 import { DEVICE_WORD, IS_MAC, IS_WIN, OS_LABEL, osDescription, PATH_STYLE, SHELL_LABEL, TRASH_LABEL } from '../platform'
 import { skills } from '../skills/skills'
 
+// The instructions are the same from one message to the next: nothing in them changes with the time
+// of day or with what the request is about. What does change (the time, the memories that fit, the
+// project's files and git status) travels with the user's message instead (contextNote below). A model
+// keeps what it has already read as long as the beginning of its prompt stays the same, so on a slow
+// computer each new message costs only its own reading, not the whole chat again; at an API service
+// the unchanged beginning is billed at the cached rate.
+
+export interface PromptOptions {
+  /** The short version for a slow computer: the same rules in a few lines. */
+  compact?: boolean
+  lang?: Language
+}
+
 /** Installed skills and connected services, for both prompts. */
-function extensionsBlock(toolNames: string[], skillFit?: SkillInfo): string {
+function extensionsBlock(toolNames: string[]): string {
   const lines: string[] = []
-  if (toolNames.includes('use_skill')) lines.push(skills.promptBlock(skillFit))
+  if (toolNames.includes('use_skill')) lines.push(skills.promptBlock())
   const services = [...new Set(toolNames.filter((t) => t.startsWith('mcp_')).map((t) => t.split('_')[1]))]
   if (services.length) {
     lines.push(
@@ -74,12 +87,17 @@ const STYLE: Record<Settings['persona']['responseStyle'], string> = {
   detailed: 'Give thorough, well-structured answers with explanations, examples and caveats.'
 }
 
-export function systemPrompt(cfg: Settings, route: RouteDecision, memoryBlock: string, toolNames: string[], skillFit?: SkillInfo, lang?: Language): string {
+/** Who the assistant is and where it runs: on this computer, or at a service the person added. */
+function identity(cfg: Settings, route: RouteDecision, user: string): string {
   const name = cfg.persona.assistantName || 'Maris'
-  const user = cfg.persona.userName || os.userInfo().username
-  const now = new Date()
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
-  const folders = (['desktop', 'documents', 'downloads', 'pictures'] as const)
+  if (route.provider) {
+    return `You are ${name}, the AI assistant of the Maris app on ${user}'s own ${OS_LABEL} ${DEVICE_WORD}. You run as the model ${route.model.replace(/^@[^/]+\//, '')}${route.remote === false ? ` in ${route.provider}, on the user's own computer or network` : ` at ${route.provider}`}; your tools act on the user's ${DEVICE_WORD}. You are capable, direct and warm.`
+  }
+  return `You are ${name}, a private AI assistant that runs entirely on ${user}'s own ${OS_LABEL} ${DEVICE_WORD}. You are capable, direct and warm.`
+}
+
+function userFolders(): string {
+  return (['desktop', 'documents', 'downloads', 'pictures'] as const)
     .map((f) => {
       try {
         return `${f}: ${app.getPath(f)}`
@@ -89,20 +107,62 @@ export function systemPrompt(cfg: Settings, route: RouteDecision, memoryBlock: s
     })
     .filter(Boolean)
     .join('; ')
+}
+
+/** The same rules in a few lines, for a small model on a slow computer. */
+function compactPrompt(cfg: Settings, toolNames: string[], lang: Language | undefined, user: string, project?: ProjectFacts): string {
+  const name = cfg.persona.assistantName || 'Maris'
+  const has = (t: string): boolean => toolNames.includes(t)
+  const tools = toolNames.length > 0
+  const lines = [
+    project
+      ? `You are ${name}, a careful programmer helping ${user} with the project "${project.name}" on their ${OS_LABEL} ${DEVICE_WORD}.`
+      : `You are ${name}, a helpful assistant on ${user}'s own ${OS_LABEL} ${DEVICE_WORD}.`,
+    lang ? `Always answer in ${lang.name}.` : 'Answer in the language the user writes in.',
+    `${cfg.persona.responseStyle === 'detailed' ? 'Explain clearly' : 'Be brief and clear'}; use Markdown. ${cfg.persona.explain === 'developer' ? 'The user is technical.' : 'Use plain words.'}`,
+    project ? `Project folder: ${project.path}${project.stack.length ? ` (${project.stack.join(', ')})` : ''}. Relative paths and commands start there.` : `OS: ${osDescription()}. Home folder: ${os.homedir()}.`,
+    project?.about ? `About the project: ${project.about}` : ''
+  ]
+  if (tools) {
+    lines.push(
+      `- Use a tool when you need something from this ${DEVICE_WORD}${has('web_search') ? ' or the web' : ''}; otherwise just answer.`,
+      has('run_command') ? `- Run commands yourself with run_command, in ${SHELL_LABEL} syntax. Never tell the user to run something.` : '',
+      '- Anything that changes files or the system asks the user first: just call the tool. If they say no, stop and ask what they want.',
+      '- Never say you did something unless a tool result shows it.',
+      project && has('edit_file') ? '- Read a file before you change it. Change it with edit_file (old_text copied exactly, without line numbers); write_file is for new files.' : '',
+      project && has('run_command') ? '- After a change, run the build or the tests and fix what fails.' : '',
+      has('web_search') ? '- For anything recent, use web_search, then read_webpage on the best result.' : ''
+    )
+  }
+  if (has('use_skill')) lines.push(skills.promptBlock())
+  if (cfg.persona.customInstructions?.trim()) lines.push('Instructions from the user:', cfg.persona.customInstructions.trim().slice(0, 1200))
+  if (project?.instructions) lines.push('Project instructions:', project.instructions.slice(0, 1500))
+  return lines.filter((l) => l !== '').join('\n')
+}
+
+export function systemPrompt(cfg: Settings, route: RouteDecision, toolNames: string[], opts: PromptOptions = {}): string {
+  const user = cfg.persona.userName || os.userInfo().username
+  if (opts.compact) return compactPrompt(cfg, toolNames, opts.lang, user)
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
   const has = (t: string): boolean => toolNames.includes(t)
   const lines = [
-    `You are ${name}, a private AI assistant that runs entirely on ${user}'s own ${OS_LABEL} ${DEVICE_WORD}. You are capable, direct and warm.`,
-    `Now: ${now.toLocaleString('en-GB', { dateStyle: 'full', timeStyle: 'short' })} (${tz}). OS: ${osDescription()}. Home: ${os.homedir()}. Folders — ${folders}.`,
-    `You are running as the local model ${route.model}.`,
+    identity(cfg, route, user),
+    `Time zone: ${tz}. OS: ${osDescription()}. Home: ${os.homedir()}. Folders — ${userFolders()}.`,
+    route.provider ? '' : `You are running as the local model ${route.model}.`,
+    'Each user message may start with a short note from Maris in square brackets (the current time, things you remember about the user). It is information for you, not something the user wrote: use it, do not quote it.',
     '',
     '## How you work',
-    `- You have tools. Reading is free: look things up with tools (files, folders, processes, system info, read-only ${SHELL_LABEL} commands) instead of guessing or asking the user for facts you can check.`,
-    ...doItYourself(has),
+    toolNames.length
+      ? `- You have tools. Reading is free: look things up with tools (files, folders, processes, system info, read-only ${SHELL_LABEL} commands) instead of guessing or asking the user for facts you can check.`
+      : '- You have no tools in this chat, so answer from what you know and say so when something would need a look at the computer or the web.',
+    ...(toolNames.length ? doItYourself(has) : []),
     controlRules(has),
-    `- Anything that changes the ${DEVICE_WORD} (creating, editing, moving or deleting files, running commands that change things, opening programs, killing processes) is shown to the user for approval before it happens. Just call the tool; the app asks the user. If the user denies an action, do not try it again a different way — ask what they would prefer.`,
+    toolNames.length
+      ? `- Anything that changes the ${DEVICE_WORD} (creating, editing, moving or deleting files, running commands that change things, opening programs, killing processes) is shown to the user for approval before it happens. Just call the tool; the app asks the user. If the user denies an action, do not try it again a different way — ask what they would prefer.`
+      : '',
     '- Never claim you did something unless a tool result confirms it. Report failures honestly.',
     '- For a task with several steps, say your plan in one or two sentences, then carry it out step by step.',
-    `- Deleted files go to the ${TRASH_LABEL} and edited files are backed up first, so mention that when it helps the user feel safe.`,
+    toolNames.length ? `- Deleted files go to the ${TRASH_LABEL} and edited files are backed up first, so mention that when it helps the user feel safe.` : '',
     has('web_search')
       ? '- Use web_search and read_webpage for anything recent, time-sensitive or that you are unsure about. Cite sources as Markdown links.'
       : '- Web access is turned off for this chat; say so if the user needs current information.',
@@ -112,7 +172,7 @@ export function systemPrompt(cfg: Settings, route: RouteDecision, memoryBlock: s
     has('remember')
       ? '- When the user shares a lasting preference or fact about themselves, or asks you to remember something, save it with remember. Never store passwords or secrets.'
       : '',
-    languageRule(lang),
+    languageRule(opts.lang),
     `- ${STYLE[cfg.persona.responseStyle] ?? STYLE.balanced} Use Markdown: short paragraphs, lists, tables when useful, and fenced code blocks with a language tag.`,
     ...batchRules(has),
     cfg.persona.explain === 'developer'
@@ -120,41 +180,42 @@ export function systemPrompt(cfg: Settings, route: RouteDecision, memoryBlock: s
       : '- Write for someone who is not technical: use plain, friendly words, and when a technical term is unavoidable, explain it in a few words. After doing something on the computer, say in one or two sentences what you did and what it means for the user.',
     `- ${PATH_STYLE}`
   ].filter((l) => l !== '')
-  const ext = extensionsBlock(toolNames, skillFit)
+  const ext = extensionsBlock(toolNames)
   if (ext) lines.push('', ext)
   if (cfg.persona.customInstructions?.trim()) {
     lines.push('', '## Instructions from the user', cfg.persona.customInstructions.trim())
   }
-  if (memoryBlock) lines.push('', memoryBlock)
   return lines.join('\n')
 }
 
-export function codeSystemPrompt(
-  cfg: Settings,
-  route: RouteDecision,
-  memoryBlock: string,
-  toolNames: string[],
-  project: { name: string; path: string; stack: string[]; topLevel: string; git?: string; instructions?: string; about?: string },
-  autoEdits: boolean,
-  skillFit?: SkillInfo,
-  lang?: Language
-): string {
+/** What stays the same about a project while it is worked on (its files and git status are in the note). */
+export interface ProjectFacts {
+  name: string
+  path: string
+  stack: string[]
+  instructions?: string
+  about?: string
+}
+
+export function codeSystemPrompt(cfg: Settings, route: RouteDecision, toolNames: string[], project: ProjectFacts, autoEdits: boolean, opts: PromptOptions = {}): string {
+  const user = cfg.persona.userName || os.userInfo().username
+  if (opts.compact) return compactPrompt(cfg, toolNames, opts.lang, user, project)
   const has = (t: string): boolean => toolNames.includes(t)
   const lines = [
-    `You are ${cfg.persona.assistantName || 'Maris'}, an expert software engineer pairing with the user on their project. You run locally on their ${OS_LABEL} ${DEVICE_WORD} as ${route.model}.`,
-    `Now: ${new Date().toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}. OS: ${osDescription()}. Shell: ${SHELL_LABEL}.`,
+    `You are ${cfg.persona.assistantName || 'Maris'}, an expert software engineer pairing with the user on their project. You run ${route.provider ? (route.remote === false ? `in ${route.provider} on their own computer or network` : `at ${route.provider}`) : 'locally'} as ${route.model.replace(/^@[^/]+\//, '')}; your tools act on their ${OS_LABEL} ${DEVICE_WORD}.`,
+    `OS: ${osDescription()}. Shell: ${SHELL_LABEL}.`,
+    'Each user message may start with a short note from Maris in square brackets (the current time, the project\'s files and git status, things you remember). It is information for you, not something the user wrote.',
     '',
     `## Project: ${project.name}`,
     ...(project.about ? [`About this project (written by the user): ${project.about}`] : []),
     `Root: ${project.path} (relative paths in tools resolve against it; commands run there).`,
     `Stack: ${project.stack.length ? project.stack.join(', ') : 'not detected yet; look at the files'}.`,
-    `Top level: ${project.topLevel || '(empty folder)'}`,
-    project.git ? `Git status:\n${project.git}` : 'Not a git repository.',
     project.instructions ? `\n## Project instructions\n${project.instructions}` : '',
     '',
     '## How to work',
     '- Understand before you change: use project_tree, grep and read_file to find the relevant code. Never guess what a file contains.',
-    languageRule(lang),
+    '- In a new or empty project, start by creating the files it needs; say in a sentence what you are setting up.',
+    languageRule(opts.lang),
     ...batchRules(has),
     controlRules(has),
     '- Make focused changes with edit_file or multi_edit (old_text must be copied exactly, WITHOUT the line-number prefix read_file shows). Use write_file only for new files or complete rewrites. Keep the existing code style.',
@@ -190,17 +251,43 @@ export function codeSystemPrompt(
     `- Language notes. C#: .NET SDK with dotnet new/build/test/run. HaxeFlixel: project.xml at the root, code in source/*.hx, run with haxelib run lime test html5|${IS_WIN ? 'windows' : IS_MAC ? 'mac' : 'linux'}|hl. Rust: cargo, rustfmt, clippy. Python: a venv plus pytest. Web: plain HTML/CSS/JS or the project's bundler. ${IS_WIN ? 'C++: CMake with MSVC (vcvars64) or clang.' : IS_MAC ? 'C++: CMake with Apple clang (Xcode command line tools).' : 'C++: CMake with gcc or clang.'}`,
     has('web_search') ? '- Look things up with web_search/read_webpage when you need current docs or API details (for example HaxeFlixel APIs).' : ''
   ].filter((l) => l !== '')
-  const ext = extensionsBlock(toolNames, skillFit)
+  const ext = extensionsBlock(toolNames)
   if (ext) lines.push('', ext)
   if (cfg.persona.customInstructions?.trim()) lines.push('', '## Instructions from the user', cfg.persona.customInstructions.trim())
-  if (memoryBlock) lines.push('', memoryBlock)
   return lines.join('\n')
 }
+
+/**
+ * What changes from one message to the next, written in front of the user's message and kept with it:
+ * the time, memories that fit this request (each told once per chat), the project's files and git
+ * status when they changed, and a skill that fits.
+ */
+export function contextNote(parts: { now?: Date; memories?: { kind: string; text: string }[]; projectState?: string; skill?: SkillInfo }): string {
+  const lines: string[] = []
+  const now = parts.now ?? new Date()
+  lines.push(`Now: ${now.toLocaleString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}.`)
+  if (parts.memories?.length) {
+    lines.push('You remember about the user (use it naturally when it helps; never recite it):')
+    for (const m of parts.memories) lines.push(`- (${m.kind}) ${m.text}`)
+  }
+  if (parts.projectState) lines.push(parts.projectState)
+  if (parts.skill) lines.push(`This request fits the skill "${parts.skill.name}": call use_skill with "${parts.skill.name}" before you answer.`)
+  return `[Note from Maris, not written by the user. ${lines.join('\n')}]`
+}
+
+/** A project's files and git status as the note tells them (told again only when they changed). */
+export function projectState(p: { topLevel: string; git?: string }): string {
+  return `${PROJECT_STATE_MARK} ${p.topLevel || '(empty)'}\n${p.git ? `Git status:\n${p.git}` : 'Not a git repository.'}`
+}
+export const PROJECT_STATE_MARK = 'Project folder now:'
 
 export const COMPACT_SYSTEM = `You are compacting a long working session so it can continue in a fresh context window.
 Write a faithful summary for yourself, in English, as bullet points under these headings:
 Latest request (the user's most recent request that is not finished yet, quoted word for word); Goal and requirements; Decisions made; Files created or changed (paths, what and why); Commands run and results (include exact errors still unresolved); Current state; Next steps.
 Keep every detail needed to continue the work. Drop small talk. At most 450 words.`
+
+/** The same for a slow computer, where every word of a summary takes time to write and to read again. */
+export const COMPACT_SYSTEM_BRIEF = `Summarise this conversation so it can continue with less text. In English, as short bullet points: what the user wants (their latest unfinished request word for word), what was done and found (files, results, errors), and what comes next. At most 120 words.`
 
 export const TITLE_SYSTEM =
   'Write a short, specific title (2 to 6 words) for this conversation in the language the user wrote in. No quotes, no trailing punctuation.'

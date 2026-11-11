@@ -18,7 +18,7 @@ import { setup } from './setup'
 import { lastScan, scanPc } from './system/scan'
 import { agent, invalidateModels, listModels } from './agent/agent'
 import { approvals } from './agent/approvals'
-import { touchProject, updateProject } from './agent/project'
+import { isProjectFolder, projectKey, touchProject, updateProject } from './agent/project'
 import { installToolchain, parseInstalled, TOOLCHAINS, toolchainEvents } from './toolchains'
 import { devEnvReport } from './tools/code'
 import { decode, isBinary } from './tools/fs'
@@ -26,6 +26,8 @@ import { processes } from './tools/processes'
 import { CATALOG, cancelInstall, installModel, pulls } from './catalog'
 import { repo } from './db'
 import { ollama } from './engines/ollama'
+import { providers } from './engines/providers'
+import { backupDir, isInside } from './tools/paths'
 import { comfy } from './media/comfy'
 import { cancelDownload, downloads } from './media/downloader'
 import { media } from './media/jobs'
@@ -100,6 +102,11 @@ export function registerIpc(): void {
   feed.newsChanged.on((s) => broadcast('news:changed', s))
   skills.changed.on((s) => broadcast('skills:changed', s))
   connectors.changed.on((s) => broadcast('connectors:changed', s))
+  providers.changed.on((s) => {
+    // The models on offer changed with the service.
+    invalidateModels()
+    broadcast('providers:changed', s)
+  })
   setup.changed.on((p) => broadcast('setup:progress', p))
 
   // ---------------------------------------------------------------- chat
@@ -307,9 +314,10 @@ export function registerIpc(): void {
       if (r.canceled || !r.filePaths[0]) return undefined
       target = r.filePaths[0]
     }
+    if (!isProjectFolder(projectKey(target))) throw new Error(`That folder does not exist: ${target}`)
     return touchProject(target)
   })
-  h('project:remove', (dir: string) => repo.removeProject(dir))
+  h('project:remove', (dir: string) => repo.removeProject(projectKey(dir)))
   h('project:update', (dir: string, patch: { name?: string; description?: string }) => updateProject(dir, patch))
   h('project:forgetCommand', (dir: string, prefix: string) => {
     const p = repo.getProject(dir)
@@ -338,8 +346,12 @@ export function registerIpc(): void {
     return { text: decode(buf), size: st.size }
   })
   h('project:revert', async (backupPath: string, target: string) => {
-    // Restoring a backup is a change the user starts with a click.
+    // Restoring a backup is a change the user starts with a click. Only Maris's own backups can be
+    // restored this way: anything else would let this call copy any file over any other.
+    if (!isInside(path.resolve(String(backupPath)), backupDir())) throw new Error('That is not one of Maris’s backups.')
     if (!existsSync(backupPath)) throw new Error('The backup is gone')
+    if (!target || !path.isAbsolute(String(target))) throw new Error('The file to restore is not known.')
+    await fs.mkdir(path.dirname(target), { recursive: true })
     await fs.copyFile(backupPath, target)
     return true
   })
@@ -352,9 +364,23 @@ export function registerIpc(): void {
   h('project:create', async (parent: string, name: string, description?: string) => {
     const clean = name.trim().replace(/[<>:"/\\|?*\u0000-\u001F]/g, '').replace(/[. ]+$/, '')
     if (!clean) throw new Error('Give the project a name.')
+    // Windows keeps these names for devices; a folder called "con" or "nul" cannot be made there.
+    if (process.platform === 'win32' && /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(clean)) throw new Error(`Windows keeps the name "${clean}" for itself. Pick another name.`)
     if (!parent || !path.isAbsolute(parent)) throw new Error('Pick where the project goes.')
     const dir = path.join(parent, clean)
-    await fs.mkdir(dir, { recursive: true })
+    if (existsSync(dir)) {
+      if (!isProjectFolder(dir)) throw new Error(`There is already a file called ${clean} in that folder. Pick another name.`)
+      // A new project starts in a folder of its own: one that already holds things is opened, not "created".
+      if ((await fs.readdir(dir).catch(() => [] as string[])).length) {
+        throw new Error(`There is already a folder called ${clean} there, and it is not empty. Pick another name, or choose “Open a folder I already have” to work in it.`)
+      }
+    }
+    try {
+      await fs.mkdir(dir, { recursive: true })
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code
+      throw new Error(code === 'EACCES' || code === 'EPERM' ? `Maris may not create folders in ${parent}. Pick another place.` : `Could not create ${dir}: ${(e as Error).message}`)
+    }
     touchProject(dir)
     return updateProject(dir, { name: clean, ...(description?.trim() ? { description: description.trim() } : {}) })
   })
@@ -468,6 +494,16 @@ export function registerIpc(): void {
   h('connectors:setEnabled', (id: string, on: boolean) => connectors.setEnabled(id, Boolean(on)))
   h('connectors:reconnect', (id: string) => connectors.reconnect(id))
 
+  // ---------------------------------------------------------------- model services (Claude, OpenAI-compatible)
+  h('providers:list', () => providers.list())
+  h('providers:presets', () => providers.presets())
+  h('providers:add', (presetId: string, values: { key?: string; baseUrl?: string; name?: string }) => providers.add(presetId, values ?? {}))
+  h('providers:edit', (id: string, values: { key?: string; baseUrl?: string; name?: string }) => providers.edit(id, values ?? {}))
+  h('providers:remove', (id: string) => providers.remove(id))
+  h('providers:setEnabled', (id: string, on: boolean) => providers.setEnabled(id, Boolean(on)))
+  h('providers:setPicked', (id: string, picked: string[]) => providers.setPicked(id, Array.isArray(picked) ? picked.map(String) : []))
+  h('providers:refresh', (id: string) => providers.refresh(id))
+
   // ---------------------------------------------------------------- Maris Link (desktop window only)
   h('link:status', () => link.status())
   h('link:startPairing', () => link.startPairing())
@@ -480,6 +516,8 @@ export function registerIpc(): void {
     version: app.getVersion(),
     userDir: app.getPath('userData'),
     dataDir: settings.get().dataDir,
-    electron: process.versions.electron
+    electron: process.versions.electron,
+    // Mica and Acrylic exist from Windows 11 22H2; macOS has vibrancy; elsewhere the window is solid.
+    material: process.platform === 'darwin' || (process.platform === 'win32' && Number(os.release().split('.')[2]) >= 22621)
   }))
 }
