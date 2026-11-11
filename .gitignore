@@ -8,3 +8,8 @@ release/
 coverage/
 *.tsbuildinfo
 test-results/
+
+# The trailer: filmed footage and the lists made from it (scripts/trailer/capture.mjs and build.mjs make them)
+scripts/trailer/footage/
+scripts/trailer/film/footage.js
+scripts/trailer/film/timeline.js

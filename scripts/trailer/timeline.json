@@ -1,0 +1,623 @@
+{
+  "meta": {
+    "w": 1920,
+    "h": 1080,
+    "fps": 60,
+    "dur": 36.8,
+    "clock": "music",
+    "register": "clean",
+    "loop": false,
+    "bpm": 112.5,
+    "meter": "4/4",
+    "bars": 17.25,
+    "t0": 0,
+    "songOffset": 0,
+    "grid": "designed",
+    "hookWaiver": null,
+    "beat": 0.5333333333333333,
+    "framesPerBeat": 32
+  },
+  "objects": [
+    {
+      "id": "window",
+      "role": "constant",
+      "what": "the Maris window: one card, in one place; what is in it changes on the beat, and at the end it becomes the cartridge logo"
+    },
+    {
+      "id": "headline",
+      "role": "prop",
+      "what": "one line of large type in the left column per scene, with at most one small line under it"
+    },
+    {
+      "id": "ring",
+      "role": "prop",
+      "what": "a drawn ring that says \"look here\" on the real interface; never part of it"
+    },
+    {
+      "id": "glass",
+      "role": "prop",
+      "what": "a magnifying glass on the real interface: the same pixels, larger, where a small word is the proof"
+    },
+    {
+      "id": "cursor",
+      "role": "hero",
+      "what": "the pointer that gives the OK: it appears only for the approval"
+    },
+    {
+      "id": "cartridge",
+      "role": "bridge",
+      "what": "the Maris mark: beside the name in the hook, and what the window turns into at the end"
+    }
+  ],
+  "scenes": [
+    {
+      "id": "hook",
+      "start": 0,
+      "end": 3.2,
+      "beats": {
+        "start": 0,
+        "type": 0.2667,
+        "typed": 2.88,
+        "leave": 3.12
+      },
+      "transitionOut": {
+        "type": "next step",
+        "dur": 0.6,
+        "why": "the question typed during the hook is sent, and the window moves in to answer it",
+        "bridge": "window"
+      }
+    },
+    {
+      "id": "chat",
+      "start": 3.2,
+      "end": 8,
+      "beats": {
+        "send": 3.2,
+        "line": 3.4667,
+        "chip": 5.0667
+      },
+      "transitionOut": {
+        "type": "match on position",
+        "dur": 0,
+        "why": "the window opens into the pictures it can make, in the same place",
+        "bridge": "window"
+      }
+    },
+    {
+      "id": "pictures",
+      "start": 8,
+      "end": 11.2,
+      "beats": {
+        "cut": 8,
+        "line": 8.1333,
+        "tile1": 8,
+        "tile2": 8.2667,
+        "tile3": 8.5333,
+        "tile4": 8.8,
+        "clip": 9.0667
+      },
+      "transitionOut": {
+        "type": "match on position",
+        "dur": 0,
+        "why": "the pictures close back into the window, now on the Models page",
+        "bridge": "window"
+      }
+    },
+    {
+      "id": "models",
+      "start": 11.2,
+      "end": 14.9333,
+      "beats": {
+        "cut": 11.2,
+        "line": 11.3333,
+        "hop1": 12,
+        "hop2": 12.5333,
+        "hop3": 13.0667
+      },
+      "transitionOut": {
+        "type": "time cut",
+        "dur": 0,
+        "why": "same window, another computer: the setup assistant on an old laptop",
+        "bridge": "window"
+      }
+    },
+    {
+      "id": "laptop",
+      "start": 14.9333,
+      "end": 18.1333,
+      "beats": {
+        "cut": 14.9333,
+        "line": 15.0667,
+        "memory": 15.4667
+      },
+      "transitionOut": {
+        "type": "time cut",
+        "dur": 0,
+        "why": "same window, back on this PC, a moment after it was given work in a project",
+        "bridge": "window"
+      }
+    },
+    {
+      "id": "read",
+      "start": 18.1333,
+      "end": 21.3333,
+      "beats": {
+        "cut": 18.1333,
+        "line": 18.2667,
+        "build": 19.2
+      },
+      "transitionOut": {
+        "type": "cause → effect",
+        "dur": 0,
+        "why": "the task needs a file changed, so Maris stops and asks",
+        "bridge": "window"
+      }
+    },
+    {
+      "id": "halt",
+      "start": 21.3333,
+      "end": 25.6,
+      "beats": {
+        "ask": 21.3333,
+        "push": 21.4933,
+        "rule": 21.7333,
+        "stop": 22.1333,
+        "cursor": 23.7333,
+        "rest": 24.1067,
+        "held": 24.2667,
+        "move": 24.6933,
+        "aim": 25.1733
+      },
+      "transitionOut": {
+        "type": "cause → effect",
+        "dur": 0,
+        "why": "the click on Approve is what lets everything move again",
+        "bridge": "cursor"
+      }
+    },
+    {
+      "id": "payoff",
+      "start": 25.6,
+      "end": 30.4,
+      "beats": {
+        "click": 25.6,
+        "release": 25.7067,
+        "back": 26.6667,
+        "diff": 27.4667,
+        "line": 27.6,
+        "undo": 28.5333,
+        "look": 28.9333
+      },
+      "transitionOut": {
+        "type": "shape morph",
+        "dur": 1.07,
+        "why": "the window becomes the cartridge it comes in: the logo",
+        "bridge": "window"
+      }
+    },
+    {
+      "id": "end",
+      "start": 30.4,
+      "end": 36.8,
+      "beats": {
+        "morph": 30.4,
+        "land": 31.4667,
+        "links": 31.7333
+      }
+    }
+  ],
+  "cuts": [
+    8,
+    11.2,
+    14.9333,
+    18.1333,
+    21.3333,
+    27.4667,
+    28.5333
+  ],
+  "hero": {
+    "t": 25.6,
+    "what": "after three and a half seconds in which nothing moves on and nothing sounds, the pointer presses Approve and the film starts again"
+  },
+  "silences": [
+    {
+      "from": 22.2533,
+      "to": 25.55
+    }
+  ],
+  "arc": {
+    "quantity": "how close the camera is to the window",
+    "values": {
+      "hook to laptop": 1.5,
+      "read": "1.5 → 1.55",
+      "halt": "1.55 → 2.3",
+      "payoff": "2.3 → 1.5",
+      "end": "the window becomes the logo"
+    }
+  },
+  "sfx": [
+    {
+      "at": "hook.type",
+      "offset": 0,
+      "src": "keys",
+      "gain": 0.5,
+      "why": "the question being typed; a tick for about every second character"
+    },
+    {
+      "at": "chat.send",
+      "offset": 0,
+      "src": "pop",
+      "gain": 0.5,
+      "why": "the message leaves"
+    },
+    {
+      "at": "pictures.tile1",
+      "offset": 0,
+      "src": "tile:0",
+      "gain": 0.6,
+      "why": "a picture lands (rising notes, one per picture)"
+    },
+    {
+      "at": "pictures.tile2",
+      "offset": 0,
+      "src": "tile:1",
+      "gain": 0.6,
+      "why": "second picture"
+    },
+    {
+      "at": "pictures.tile3",
+      "offset": 0,
+      "src": "tile:2",
+      "gain": 0.6,
+      "why": "third picture"
+    },
+    {
+      "at": "pictures.tile4",
+      "offset": 0,
+      "src": "tile:3",
+      "gain": 0.6,
+      "why": "fourth picture"
+    },
+    {
+      "at": "pictures.clip",
+      "offset": 0,
+      "src": "tile:4",
+      "gain": 0.65,
+      "why": "the video tile"
+    },
+    {
+      "at": "halt.ask",
+      "offset": 0,
+      "src": "thunk",
+      "gain": 0.8,
+      "why": "the approval request lands and the music starts to fall away"
+    },
+    {
+      "at": "payoff.click",
+      "offset": 0,
+      "src": "click+hit",
+      "gain": 1,
+      "why": "the OK: the loudest moment of the film"
+    },
+    {
+      "at": "end.land",
+      "offset": 0,
+      "src": "latch+note",
+      "gain": 0.5,
+      "why": "the cartridge seats; one soft note in key, then the tail"
+    }
+  ],
+  "texts": [
+    {
+      "id": "hook",
+      "role": "hook",
+      "px": 100,
+      "text": "Private AI that runs on your PC.",
+      "from": 0,
+      "to": 3.12,
+      "box": [
+        96,
+        428,
+        844,
+        235
+      ]
+    },
+    {
+      "id": "name",
+      "role": "term",
+      "px": 76,
+      "text": "Maris",
+      "from": 0,
+      "to": 3.12,
+      "box": [
+        210,
+        309,
+        189,
+        101
+      ]
+    },
+    {
+      "id": "cta",
+      "role": "cta",
+      "px": 48,
+      "text": "github.com/MarySueXLsD/Maris-Local-AI",
+      "from": 0,
+      "to": 3.12,
+      "box": [
+        96,
+        694,
+        1023,
+        56
+      ]
+    },
+    {
+      "id": "ask",
+      "px": 88,
+      "text": "Ask it anything.",
+      "from": 3.8933,
+      "to": 7.7867
+    },
+    {
+      "id": "local",
+      "px": 36,
+      "text": "Answered on this PC.",
+      "from": 5.4933,
+      "to": 7.7867
+    },
+    {
+      "id": "make",
+      "px": 88,
+      "text": "Make pictures and video.",
+      "from": 8.5333,
+      "to": 10.9867
+    },
+    {
+      "id": "made",
+      "px": 36,
+      "text": "Made locally in Maris.",
+      "from": 8.6933,
+      "to": 10.9867
+    },
+    {
+      "id": "any",
+      "px": 88,
+      "text": "Use any model.",
+      "from": 11.68,
+      "to": 14.72
+    },
+    {
+      "id": "key",
+      "px": 36,
+      "text": "Local, or with your own key.",
+      "from": 11.7867,
+      "to": 14.72
+    },
+    {
+      "id": "old",
+      "px": 88,
+      "text": "Even on an old laptop.",
+      "from": 15.4133,
+      "to": 17.92
+    },
+    {
+      "id": "sim",
+      "px": 36,
+      "text": "Simulated 2012 laptop.",
+      "from": 15.52,
+      "to": 17.92
+    },
+    {
+      "id": "reads",
+      "px": 88,
+      "text": "It can read everything.",
+      "from": 18.6133,
+      "to": 21.12
+    },
+    {
+      "id": "rule",
+      "px": 88,
+      "text": "It changes nothing without your OK.",
+      "from": 22.24,
+      "to": 25.5893
+    },
+    {
+      "id": "approved",
+      "px": 124,
+      "text": "Approved.",
+      "from": 25.76,
+      "to": 27.3067
+    },
+    {
+      "id": "undo",
+      "px": 88,
+      "text": "Undo any edit.",
+      "from": 28.0267,
+      "to": 30.24
+    },
+    {
+      "id": "code",
+      "px": 36,
+      "text": "In Code mode.",
+      "from": 28.1333,
+      "to": 30.24
+    },
+    {
+      "id": "endname",
+      "role": "term",
+      "px": 104,
+      "text": "Maris",
+      "from": 32.2133,
+      "to": 36.8,
+      "box": [
+        96,
+        231,
+        256,
+        138
+      ]
+    },
+    {
+      "id": "endline",
+      "px": 40,
+      "text": "Private AI that runs on your PC.",
+      "from": 32.32,
+      "to": 36.8
+    },
+    {
+      "id": "what-repo",
+      "px": 34,
+      "text": "Get it for Windows, macOS and Linux",
+      "from": 32.48,
+      "to": 36.8
+    },
+    {
+      "id": "link-repo",
+      "role": "cta",
+      "px": 52,
+      "text": "github.com/MarySueXLsD/Maris-Local-AI",
+      "from": 32.48,
+      "to": 36.8,
+      "box": [
+        96,
+        507,
+        1108,
+        60
+      ]
+    },
+    {
+      "id": "what-git",
+      "px": 34,
+      "text": "More from the author",
+      "from": 32.5867,
+      "to": 36.8
+    },
+    {
+      "id": "link-git",
+      "px": 40,
+      "text": "github.com/MarySueXLsD",
+      "from": 32.5867,
+      "to": 36.8
+    },
+    {
+      "id": "what-itch",
+      "px": 34,
+      "text": "Games",
+      "from": 32.6933,
+      "to": 36.8
+    },
+    {
+      "id": "link-itch",
+      "px": 40,
+      "text": "marysue.itch.io",
+      "from": 32.6933,
+      "to": 36.8
+    }
+  ],
+  "terms": [
+    "Maris",
+    "Private AI",
+    "your PC"
+  ],
+  "typing": {
+    "hook": [
+      0.2948,
+      0.3242,
+      0.3755,
+      0.4201,
+      0.4604,
+      0.5168,
+      0.5559,
+      0.5895,
+      0.6306,
+      0.6986,
+      0.7327,
+      0.7643,
+      0.8105,
+      0.8709,
+      0.9035,
+      0.9402,
+      0.9925,
+      1.0332,
+      1.0682,
+      1.1195,
+      1.1702,
+      1.2191,
+      1.2515,
+      1.2985,
+      1.3301,
+      1.365,
+      1.4265,
+      1.4726,
+      1.5022,
+      1.552,
+      1.5931,
+      1.6572,
+      1.7014,
+      1.7524,
+      1.7952,
+      1.8701,
+      1.9177,
+      1.9466,
+      1.9787,
+      2.0151,
+      2.0532,
+      2.0957,
+      2.1257,
+      2.172,
+      2.2087,
+      2.2468,
+      2.2859,
+      2.3617,
+      2.4064,
+      2.4507,
+      2.4865,
+      2.5229,
+      2.5541,
+      2.5852,
+      2.6598,
+      2.6954,
+      2.7279,
+      2.7709,
+      2.8068,
+      2.8357,
+      2.88
+    ]
+  },
+  "camera": [
+    {
+      "t": 0,
+      "zoom": 1.5,
+      "focus": "whole",
+      "why": "the whole window"
+    },
+    {
+      "t": 18.1333,
+      "zoom": 1.5,
+      "focus": "whole",
+      "why": "the task has just been sent"
+    },
+    {
+      "t": 21.4933,
+      "zoom": 1.545,
+      "focus": "whole",
+      "why": "a 3% lean in while Maris works: the hold is alive, and it is the start of the push"
+    },
+    {
+      "t": 24.1067,
+      "zoom": 2.3,
+      "focus": "request",
+      "why": "a slow push through the silence, at rest before the pointer goes to Approve"
+    },
+    {
+      "t": 25.7067,
+      "zoom": 2.3,
+      "focus": "request",
+      "why": "still through the click"
+    },
+    {
+      "t": 26.6667,
+      "zoom": 1.5,
+      "focus": "whole",
+      "why": "release: back to the whole window as work resumes"
+    }
+  ]
+}

@@ -1,0 +1,283 @@
+/* The trailer's look. Colours are the app's own: violet for the brand, gold for one thing only,
+   the viewer's OK. Type is the app's type (Segoe UI Variable, Cascadia Code). */
+:root {
+  --ground: #130e2a;
+  --ground-lit: #33257c;
+  --ink: #f7f5ff;
+  --soft: #bdb6dc;
+  --violet: #6a4fe0;
+  --violet-light: #a493ff;
+  --gold: #f2b544;
+  --display: 'Segoe UI Variable Display', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  --text: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  --mono: 'Cascadia Code', 'Cascadia Mono', Consolas, ui-monospace, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: #0b0818;
+  overflow: hidden;
+}
+
+#stage {
+  position: relative;
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  transform-origin: 0 0;
+  color: var(--ink);
+  font-family: var(--text);
+  /* A lit backdrop behind where the window stands, falling off into the ground colour. */
+  background:
+    radial-gradient(58% 72% at 70% 46%, var(--ground-lit) 0%, #20184d 38%, rgba(19, 14, 42, 0) 74%),
+    radial-gradient(40% 50% at 8% 96%, #241a58 0%, rgba(19, 14, 42, 0) 70%),
+    var(--ground);
+}
+
+#stage > * {
+  position: absolute;
+}
+
+#dim {
+  inset: 0;
+  pointer-events: none;
+  background: #06030f;
+}
+
+/* ---- the window */
+#card {
+  left: 0;
+  top: 0;
+  transform-origin: 50% 50%;
+  background: var(--violet);
+  box-shadow:
+    0 2px 0 rgba(255, 255, 255, 0.08) inset,
+    0 0 0 1px rgba(255, 255, 255, 0.07),
+    0 46px 110px rgba(5, 2, 20, 0.62),
+    0 12px 30px rgba(5, 2, 20, 0.4);
+  overflow: hidden;
+}
+
+#view {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+#shot {
+  position: absolute;
+  display: block;
+  max-width: none;
+}
+
+#ring {
+  position: absolute;
+  border: 4px solid var(--violet);
+  border-radius: 13px;
+  box-shadow: 0 0 0 5px rgba(106, 79, 224, 0.16);
+  transform-origin: 50% 50%;
+}
+
+/* A magnifying glass over the real interface: the same picture, larger. */
+#glass {
+  position: absolute;
+  overflow: hidden;
+  border: 4px solid var(--violet);
+  border-radius: 18px;
+  background: #fff;
+  box-shadow:
+    0 0 0 5px rgba(106, 79, 224, 0.16),
+    0 22px 50px rgba(20, 12, 60, 0.38);
+}
+
+#glass img {
+  position: absolute;
+  display: block;
+  max-width: none;
+}
+
+#ripple {
+  position: absolute;
+  border: 5px solid var(--gold);
+  border-radius: 50%;
+}
+
+#cursor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  filter: drop-shadow(0 3px 5px rgba(10, 6, 30, 0.45));
+}
+
+/* ---- pictures */
+.tile {
+  overflow: hidden;
+  border-radius: 20px;
+  background: #1c1540;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 30px 70px rgba(5, 2, 20, 0.55);
+  transform-origin: 50% 60%;
+}
+
+.tile img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* ---- type */
+.head {
+  left: 96px;
+  top: 524px;
+  width: 600px;
+  translate: 0 -50%;
+  font-family: var(--display);
+  font-weight: 700;
+  letter-spacing: -0.028em;
+  line-height: 1;
+}
+
+.head .line {
+  white-space: nowrap;
+  padding-bottom: 0.06em;
+}
+
+.head b,
+.gold {
+  color: var(--gold);
+  font-weight: inherit;
+}
+
+.note {
+  margin-top: 30px;
+  font-family: var(--text);
+  font-weight: 500;
+  font-size: 36px;
+  letter-spacing: 0;
+  line-height: 1.25;
+  color: var(--soft);
+  white-space: nowrap;
+}
+
+#hook {
+  left: 96px;
+  top: 540px;
+  width: 1100px;
+  translate: 0 -50%;
+}
+
+#hook .brand {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 76px;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+#hook .promise {
+  margin-top: 38px;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 100px;
+  letter-spacing: -0.03em;
+  line-height: 1.02;
+}
+
+.url {
+  font-family: var(--mono);
+  font-weight: 500;
+  font-size: 48px;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  white-space: nowrap;
+  color: var(--ink);
+}
+
+#hook .cta {
+  margin-top: 46px;
+}
+
+#hook .cta .url {
+  display: inline-block;
+  padding-bottom: 10px;
+  border-bottom: 4px solid var(--violet-light);
+}
+
+#end {
+  left: 96px;
+  top: 540px;
+  width: 1150px;
+  translate: 0 -50%;
+}
+
+#end .name {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 104px;
+  letter-spacing: -0.035em;
+  line-height: 1;
+}
+
+#end .promise {
+  margin-top: 16px;
+  font-family: var(--text);
+  font-weight: 500;
+  font-size: 40px;
+  line-height: 1.2;
+  color: var(--soft);
+}
+
+#end .links {
+  margin-top: 44px;
+}
+
+#end .link {
+  margin-top: 30px;
+}
+
+/* The one thing to do is the first address: the largest, and underlined as in the opening. */
+#end .link.repo .url {
+  display: inline-block;
+  font-size: 52px;
+  padding-bottom: 10px;
+  border-bottom: 4px solid var(--violet-light);
+}
+
+#end .link.git .url,
+#end .link.itch .url {
+  font-size: 40px;
+  opacity: 0.74;
+}
+
+#end .what {
+  display: block;
+  font-family: var(--text);
+  font-weight: 600;
+  font-size: 34px;
+  line-height: 1.2;
+  color: var(--soft);
+  margin-bottom: 6px;
+}
+
+#mark {
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+
+#mark svg,
+#hook .brand svg {
+  display: block;
+  overflow: visible;
+}

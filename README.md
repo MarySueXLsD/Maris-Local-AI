@@ -10,6 +10,8 @@ The models run on your own machine through Ollama. If you want, Maris also answe
 
 A setup assistant scans the computer and chooses models that suit it, from a 24 GB graphics card down to an old laptop with 4 GB of memory and no graphics card at all. Maris runs on **Windows**, **macOS** (Apple chips and Intel) and **Linux** (NVIDIA, AMD, Intel or CPU only), and the **Android app** uses it from your phone over your home Wi-Fi, end-to-end encrypted.
 
+**[Watch the trailer on YouTube →](https://youtu.be/oCeyilxar-4)**
+
 **[Download the latest release](https://github.com/MarySueXLsD/Maris-Local-AI/releases/latest)**. After the first install, Maris updates itself.
 
 <p align="center">
@@ -120,7 +122,7 @@ npm run build          # production bundle in out/
 npm run dist           # Windows installer in release/windows/
 ```
 
-`npm run dist:mac` and `npm run dist:linux` build on those systems, and `npm run mobile:apk` builds the Android app. End-to-end tests live in [`tests/e2e/`](tests/e2e) and run against a throwaway profile; each file says how to run it. The ones for API models, low-power mode and closing use [`fixtures/mock-llm.mjs`](tests/e2e/fixtures/mock-llm.mjs), a stand-in for Ollama, OpenAI-style services and Claude, so they need no key, no downloads and no graphics card. `node tests/e2e/claude-live.mjs` is the one test that uses a real Claude key (it asks for it in the terminal and costs a few cents); `--dry` runs it against the stand-in. `node scripts/update-prices.mjs` refreshes the list prices Maris ships with.
+`npm run dist:mac` and `npm run dist:linux` build on those systems, and `npm run mobile:apk` builds the Android app. End-to-end tests live in [`tests/e2e/`](tests/e2e) and run against a throwaway profile; each file says how to run it. The ones for API models, low-power mode and closing use [`fixtures/mock-llm.mjs`](tests/e2e/fixtures/mock-llm.mjs), a stand-in for Ollama, OpenAI-style services and Claude, so they need no key, no downloads and no graphics card. `node tests/e2e/claude-live.mjs` is the one test that uses a real Claude key (it asks for it in the terminal and costs a few cents); `--dry` runs it against the stand-in. `node scripts/update-prices.mjs` refreshes the list prices Maris ships with. The trailer is made in code from footage of the real app; [`scripts/trailer/`](scripts/trailer) holds it and says how to rebuild it.
 
 Built with Electron, React, Tailwind, [Ollama](https://ollama.com) for language models, [ComfyUI](https://www.comfy.org) for pictures and video, and Anthropic's official SDK for Claude. App data lives in `%APPDATA%\Maris`, `~/Library/Application Support/Maris` or `~/.config/Maris`; models and creations live in the data folder chosen during setup.
 
