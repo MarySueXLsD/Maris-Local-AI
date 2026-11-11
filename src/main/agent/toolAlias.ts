@@ -78,7 +78,14 @@ const SYNONYMS: Record<string, string> = {
   settings: 'maris_settings',
   getsettings: 'maris_settings',
   changesettings: 'change_maris_settings',
-  setsetting: 'change_maris_settings'
+  setsetting: 'change_maris_settings',
+  help: 'maris_help',
+  gethelp: 'maris_help',
+  apphelp: 'maris_help',
+  marisguide: 'maris_help',
+  status: 'maris_status',
+  appstatus: 'maris_status',
+  marisinfo: 'maris_status'
 }
 
 /**

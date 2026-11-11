@@ -445,8 +445,17 @@ export function SettingsView() {
   const updateSettings = useApp((st) => st.updateSettings)
   const openSetup = useApp((st) => st.openSetup)
   const announce = useApp((st) => st.announce)
-  const [section, setSection] = useState<SectionId>('appearance')
+  // A page link in an answer ("page:settings/phone") opens the page on that section.
+  const wanted = useApp((st) => st.settingsSection)
+  const known = (id?: string): SectionId | undefined => SECTIONS.find((x) => x.id === id)?.id
+  const [section, setSection] = useState<SectionId>(known(wanted?.id) ?? 'appearance')
   const [query, setQuery] = useState('')
+  useEffect(() => {
+    const id = known(wanted?.id)
+    if (!id) return
+    setSection(id)
+    setQuery('')
+  }, [wanted])
   const [genRole, setGenRole] = useState<'fast' | 'balanced' | 'max' | 'code'>('max')
   const [packs, setPacks] = useState<PackInfo[]>([])
   const [info, setInfo] = useState<{ version: string; userDir: string; dataDir: string; electron: string }>()

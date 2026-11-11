@@ -18,5 +18,5 @@
       "@shared/*": ["src/shared/*"]
     }
   },
-  "include": ["electron.vite.config.ts", "vite.cli.config.ts", "src/main/**/*", "src/preload/**/*", "src/shared/**/*", "src/cli/**/*", "src/renderer/src/lib/format.ts", "src/renderer/src/components/chat/describe.ts", "src/renderer/src/views/settings/schema.ts"]
+  "include": ["electron.vite.config.ts", "vite.cli.config.ts", "src/main/**/*", "src/preload/**/*", "src/shared/**/*", "src/cli/**/*", "src/renderer/src/lib/format.ts", "src/renderer/src/components/chat/describe.ts", "src/renderer/src/views/settings/schema.ts", "src/renderer/src/help/*.ts", "src/renderer/src/lib/platform.ts"]
 }

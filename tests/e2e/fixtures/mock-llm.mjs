@@ -129,6 +129,19 @@ function plan({ model, task, result, tools, images = false }) {
     if (result === undefined) return { kind: 'tool', name: 'run_command', args: { command: run[1].trim() } }
     return { kind: 'text', text: `The command printed: ${result.replace(/\s+/g, ' ').slice(0, 300)}` }
   }
+  // A question about Maris itself: looked up in the app's help, as the instructions ask of a real model.
+  const help = /Ask the Maris help: ([^\n]+)/.exec(all)
+  if (help && tools.includes('maris_help')) {
+    if (result === undefined) return { kind: 'tool', name: 'maris_help', args: { topic: help[1].trim() } }
+    const title = /^# (.+)/m.exec(result)?.[1] ?? '(no article)'
+    const where = /^Where in the app: (.+)$/m.exec(result)?.[1] ?? ''
+    const now = /Right now in this copy of Maris:\n((?:- .+\n?)+)/.exec(result)?.[1] ?? ''
+    return { kind: 'text', text: `The help article is "${title}". Open ${where}\n\n${now}` }
+  }
+  if (/What is set up in Maris\?/.test(all) && tools.includes('maris_status')) {
+    if (result === undefined) return { kind: 'tool', name: 'maris_status', args: {} }
+    return { kind: 'text', text: result.slice(0, 3000) }
+  }
   if (/BROKEN-CALL-TEST/.test(all) && tools.includes('list_dir')) {
     if (result === undefined) return { kind: 'tool', name: 'list_dir', args: {}, broken: '{"path": "C:\\\\' }
     return { kind: 'text', text: 'The first attempt was not readable JSON; nothing was run on a guess.' }

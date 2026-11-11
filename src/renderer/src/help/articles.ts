@@ -36,6 +36,11 @@ export const ARTICLES: Article[] = [
 - **Pictures and videos**: pick **Image** or **Video** next to the globe in the message box and describe what you want. See [Making pictures and videos](help:studio).
 - **Memory**: Maris remembers your preferences between chats. See [What Maris remembers](help:memory).
 - **Skills and connectors**: teach Maris new kinds of tasks, and link it to services such as GitHub or Notion. See [Skills](help:skills) and [Connectors](help:connectors).
+- **Other models and your phone**: answer with Claude, GPT and others through your own key ([API models](help:api-models)), and use Maris from an Android phone ([Maris on your phone](help:phone)).
+
+## Ask Maris about Maris
+
+You do not have to search this help. Ask in a chat: “how do I connect Claude?”, “can you make videos?”, “which models do I have?”, “how do I use you on my phone?”. Maris reads these articles and looks at what is set up on your ${DEVICE}, then answers with a link to the right page.
 
 ## Your first minute
 
@@ -456,6 +461,40 @@ When Maris wants to change something, it asks in the terminal with single keys: 
 If Maris is not running, the command starts it in the background first.`
   },
   {
+    id: 'phone',
+    title: 'Maris on your phone',
+    category: 'Using Maris',
+    summary: `The Android app: pairing it with this ${DEVICE}, what it can do, and how the link is protected.`,
+    keywords: 'phone android mobile app link pair pairing qr code wifi remote tablet apk tailscale vpn firewall',
+    body: `The **Android app** shows this Maris on your phone: the same chats, Code mode, approvals, pictures and settings. Everything still runs on this ${DEVICE}; the phone is a window onto it, so the ${DEVICE} has to be on with Maris open.
+
+## Getting the app
+
+Download **Maris-Link-…-Android.apk** from the same releases page the installer came from (github.com/MarySueXLsD/Maris-Local-AI/releases/latest) and install it on a phone with Android 7 or newer. There is no iPhone app.
+
+## Pairing
+
+1. On this ${DEVICE}, open **Settings → Phone** and turn on **Allow the phone app to connect**.
+2. Press **Pair a phone**. A QR code, an address and a one-time code appear.
+3. Open Maris on the phone, tap **Scan code** and point the camera at the QR code, or type the address and the code. The phone must be on the same Wi-Fi as this ${DEVICE}.
+
+Paired phones are listed under **Paired phones**; **Remove** next to one means it can no longer connect.
+
+## What the phone may do
+
+The phone can chat, work in Code mode, make pictures and change most settings. It cannot install updates, run the setup assistant or change the link itself. With **Approve changes from the phone** off, the phone shows what Maris wants to change, but you [approve](help:approvals) it at this ${DEVICE}.
+
+## How it is protected
+
+The link is **off until you turn it on** and only accepts devices on your own network (or a VPN such as Tailscale, to reach home from elsewhere). Pairing uses a one-time code, and everything between the phone and this ${DEVICE} is encrypted. Nothing goes through a server of Maris: there is none.
+
+## If the phone cannot connect
+
+- Check that both are on the same Wi-Fi, and not on a guest network that keeps devices apart.
+- Allow Maris through this ${DEVICE}’s firewall for private networks.
+- Another program may already use the port: change **Network port** in Settings → Phone and pair again.`
+  },
+  {
     id: 'skills',
     title: 'Skills: teaching Maris new tasks',
     category: 'Using Maris',
@@ -573,7 +612,7 @@ You can see your models, their roles and their sizes on the **Models** page.`
     title: 'Claude, GPT and other API models',
     category: `Your ${DEVICE} and models`,
     summary: `Adding a model service with an API key, picking its models, and what leaves your ${DEVICE}.`,
-    keywords: 'api key claude anthropic openai gpt gemini google openrouter groq mistral deepseek grok xai lm studio llama.cpp cloud service remote provider bill cost price pricing usage tokens spend money budget',
+    keywords: 'api key claude anthropic sonnet opus haiku openai gpt chatgpt gemini google openrouter groq mistral deepseek grok xai lm studio llama.cpp cloud service remote provider connect add account subscription bill cost price pricing usage tokens spend money budget',
     body: `Besides the models on your ${DEVICE}, Maris can answer with models that run **somewhere else**: Claude, GPT, Gemini and many more. You need an account with the service and its **API key** (a long password meant for programs). This is optional: without it, nothing changes.
 
 It is also a good way to get strong, fast answers on a ${DEVICE} that is too slow for big models.

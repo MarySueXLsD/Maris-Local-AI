@@ -68,7 +68,7 @@ On first start the **setup assistant** scans the graphics card, CPU, RAM and dis
 - **Skills** (`SKILL.md` folders from git or disk) and **Connectors** to MCP servers such as GitHub, Notion or Home Assistant. Connector actions that change things need approval too.
 - **Closing**: closing the window closes Maris completely, unloads its models and stops the Ollama server, so no video memory stays in use; it asks first if an answer, a picture or a download is still going. Staying in the tray is a setting, and frees video memory after a minute.
 - **Status bar** with CPU, RAM, GPU, VRAM, temperature, power and loaded models. When other programs fill half the VRAM, it lists the biggest and can end one after asking.
-- **Help** with plain-language articles, explanations on hover, and a Simple view for people who do not program.
+- **Help** with plain-language articles, explanations on hover, and a Simple view for people who do not program. Maris reads the same articles: ask it "how do I connect Claude?" or "which models do I have?" and it answers from the help and from what is set up, with a link that opens the right page.
 - **Themes**: light and dark, seven colour themes and a custom one. Full keyboard use, screen-reader labels, text size, high contrast and reduced motion.
 - **Settings**: every option is searchable, resettable and can be exported. Ask Maris in the chat to change one; it asks every time.
 

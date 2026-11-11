@@ -72,6 +72,28 @@ function doItYourself(has: (t: string) => boolean): string[] {
   ]
 }
 
+/**
+ * What the app around the assistant is. Without this a model answers questions about Maris from what it
+ * believes about AI assistants in general ("I run locally, so I cannot be connected to Claude"), although
+ * the app has a page for exactly that. The facts here are the ones people ask about most; everything else
+ * is one maris_help call away.
+ */
+function appBlock(has: (t: string) => boolean): string[] {
+  return [
+    '## Maris, the app you are part of',
+    `You are the assistant inside the Maris desktop app (version ${app.getVersion()}); the user is talking to you in its chat. "Maris", "this app" and "you" in a question about features mean this app, so answer about the app, not about AI assistants in general.`,
+    'Its pages, in the sidebar: Chat and Code mode at the top; Skills, Connectors, Memory, Models, Settings, Updates & news and Help (F1) at the bottom.',
+    `- Models: language models run on this ${DEVICE_WORD} through Ollama (Models → Text). Models at a service — Claude, GPT, Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, LM Studio or any OpenAI-compatible address — are added on Models → API with the user's own API key; ticked models then appear in the model menu at the top of a chat. So "connect Claude (or ChatGPT) to Maris" means: Models → API.`,
+    '- Pictures and videos are made from the Text | Image | Video switch in the message box (models: Models → Pictures and Models → Videos).',
+    '- Connectors link outside services such as GitHub, Notion or Home Assistant (MCP). Skills are instruction folders (SKILL.md) installed from git. Memory keeps facts about the user between chats.',
+    '- Also there: an Android phone app (Settings → Phone), the `maris` terminal command, updates that install from inside the app, themes, and settings for everything.',
+    has('maris_help')
+      ? `- When the user asks how to do, add, connect, set up or change something in Maris, what Maris can do, or why it behaves some way: call maris_help with the question first and answer from what it returns. Do not answer such a question from memory, and never say Maris cannot do something before you looked.${has('maris_status') ? ' maris_status tells what is set up right now (models, API services, connectors, phone, updates).' : ''}`
+      : '- For the details of any of these, point the user to Help (F1), which has an article on each.',
+    '- API keys, tokens and passwords are typed by the user on the page that asks for them; never ask for one in the chat and never offer to enter one.'
+  ]
+}
+
 /** Whether Maris may act as administrator and use the mouse and keyboard, and what to do either way. */
 function controlRules(has: (t: string) => boolean): string {
   if (has('run_as_admin'))
@@ -93,7 +115,7 @@ function identity(cfg: Settings, route: RouteDecision, user: string): string {
   if (route.provider) {
     return `You are ${name}, the AI assistant of the Maris app on ${user}'s own ${OS_LABEL} ${DEVICE_WORD}. You run as the model ${route.model.replace(/^@[^/]+\//, '')}${route.remote === false ? ` in ${route.provider}, on the user's own computer or network` : ` at ${route.provider}`}; your tools act on the user's ${DEVICE_WORD}. You are capable, direct and warm.`
   }
-  return `You are ${name}, a private AI assistant that runs entirely on ${user}'s own ${OS_LABEL} ${DEVICE_WORD}. You are capable, direct and warm.`
+  return `You are ${name}, the AI assistant of the Maris app. Right now you run as a model on ${user}'s own ${OS_LABEL} ${DEVICE_WORD}, so this chat stays private on it. You are capable, direct and warm.`
 }
 
 function userFolders(): string {
@@ -121,7 +143,12 @@ function compactPrompt(cfg: Settings, toolNames: string[], lang: Language | unde
     lang ? `Always answer in ${lang.name}.` : 'Answer in the language the user writes in.',
     `${cfg.persona.responseStyle === 'detailed' ? 'Explain clearly' : 'Be brief and clear'}; use Markdown. ${cfg.persona.explain === 'developer' ? 'The user is technical.' : 'Use plain words.'}`,
     project ? `Project folder: ${project.path}${project.stack.length ? ` (${project.stack.join(', ')})` : ''}. Relative paths and commands start there.` : `OS: ${osDescription()}. Home folder: ${os.homedir()}.`,
-    project?.about ? `About the project: ${project.about}` : ''
+    project?.about ? `About the project: ${project.about}` : '',
+    // The app in two lines: enough to answer "can you…?" and "how do I connect Claude?" without a guess.
+    project
+      ? ''
+      : `You are part of the Maris app. Besides the models on this ${DEVICE_WORD} it can answer with Claude, GPT and other API models (the user adds a key on Models → API), make pictures and videos (the Text | Image | Video switch in the message box), and use connectors, skills, memory and a phone app. Help (F1) explains each.`,
+    has('maris_help') ? '- For a question about Maris itself (how to add, connect, set up or change something in this app, or what it can do), call maris_help with the question and answer from what it returns; do not guess.' : ''
   ]
   if (tools) {
     lines.push(
@@ -178,8 +205,10 @@ export function systemPrompt(cfg: Settings, route: RouteDecision, toolNames: str
     cfg.persona.explain === 'developer'
       ? '- The user is technical: use precise technical terms without explaining the basics.'
       : '- Write for someone who is not technical: use plain, friendly words, and when a technical term is unavoidable, explain it in a few words. After doing something on the computer, say in one or two sentences what you did and what it means for the user.',
-    `- ${PATH_STYLE}`
-  ].filter((l) => l !== '')
+    `- ${PATH_STYLE}`,
+    '',
+    ...appBlock(has)
+  ].filter((l, i, all) => l !== '' || all[i + 1]?.startsWith('## '))
   const ext = extensionsBlock(toolNames)
   if (ext) lines.push('', ext)
   if (cfg.persona.customInstructions?.trim()) {
@@ -249,7 +278,10 @@ export function codeSystemPrompt(cfg: Settings, route: RouteDecision, toolNames:
           '  - If something failed, say what went wrong in simple terms and what you suggest next.'
         ].join('\n'),
     `- Language notes. C#: .NET SDK with dotnet new/build/test/run. HaxeFlixel: project.xml at the root, code in source/*.hx, run with haxelib run lime test html5|${IS_WIN ? 'windows' : IS_MAC ? 'mac' : 'linux'}|hl. Rust: cargo, rustfmt, clippy. Python: a venv plus pytest. Web: plain HTML/CSS/JS or the project's bundler. ${IS_WIN ? 'C++: CMake with MSVC (vcvars64) or clang.' : IS_MAC ? 'C++: CMake with Apple clang (Xcode command line tools).' : 'C++: CMake with gcc or clang.'}`,
-    has('web_search') ? '- Look things up with web_search/read_webpage when you need current docs or API details (for example HaxeFlixel APIs).' : ''
+    has('web_search') ? '- Look things up with web_search/read_webpage when you need current docs or API details (for example HaxeFlixel APIs).' : '',
+    has('maris_help')
+      ? '- You work inside the Maris app. For a question about Maris itself (how to add a model or an API key for Claude or GPT, connectors, skills, the phone app, settings, updates, what it can do), call maris_help with the question and answer from what it returns; do not guess.'
+      : ''
   ].filter((l) => l !== '')
   const ext = extensionsBlock(toolNames)
   if (ext) lines.push('', ext)

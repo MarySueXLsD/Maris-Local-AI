@@ -5,6 +5,8 @@ import rehypeHighlight from 'rehype-highlight'
 import rehypeKatex from 'rehype-katex'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
+import { isPageLink, pageNames, splitPages } from '@shared/pages'
+import { SECTIONS } from '../views/settings/schema'
 import { api } from '../lib/api'
 import { DEVICE, PLATFORM } from '../lib/platform'
 import { useApp } from '../store'
@@ -31,6 +33,35 @@ function remarkPaths() {
         const parts = splitPaths(child.value ?? '')
         if (!parts.some((p) => p.path)) continue
         const nodes: MdNode[] = parts.map((p) => (p.path ? { type: 'link', url: `path:${encodeURIComponent(p.path)}`, title: null, children: [{ type: 'text', value: p.text }] } : { type: 'text', value: p.text }))
+        kids.splice(i, 1, ...nodes)
+        i += nodes.length - 1
+      }
+    }
+    walk(tree)
+  }
+}
+
+const PAGE_NAMES = pageNames(SECTIONS)
+
+/**
+ * A remark step that turns the names of Maris's own pages ("Models → API", "Settings → Phone") into
+ * "page:" links, wherever they are written: in an answer (also in bold), in a help article, in a post.
+ */
+function remarkPages() {
+  return (tree: MdNode): void => {
+    const walk = (node: MdNode): void => {
+      const kids = node.children
+      if (!kids) return
+      for (let i = 0; i < kids.length; i++) {
+        const child = kids[i]!
+        if (child.type === 'link' || child.type === 'linkReference' || child.type === 'code' || child.type === 'inlineCode' || child.type === 'html') continue
+        if (child.type !== 'text') {
+          walk(child)
+          continue
+        }
+        const parts = splitPages(child.value ?? '', PAGE_NAMES)
+        if (!parts.some((p) => p.page)) continue
+        const nodes: MdNode[] = parts.map((p) => (p.page ? { type: 'link', url: `page:${p.page}`, title: null, children: [{ type: 'text', value: p.text }] } : { type: 'text', value: p.text }))
         kids.splice(i, 1, ...nodes)
         i += nodes.length - 1
       }
@@ -150,8 +181,8 @@ function CodeBlock({ className, children, collapse }: { className?: string; chil
   )
 }
 
-/** Links to help articles ("help:approvals") and paths ("path:…") are kept; everything else goes through the safe default. */
-const keepHelpLinks = (url: string): string => (/^help:[a-z0-9-]+$/i.test(url) || /^path:/.test(url) ? url : defaultUrlTransform(url))
+/** Links to help articles ("help:approvals"), Maris's own pages ("page:models/api") and paths ("path:…") are kept; everything else goes through the safe default. */
+const keepHelpLinks = (url: string): string => (/^help:[a-z0-9-]+$/i.test(url) || isPageLink(url) || /^path:/.test(url) ? url : defaultUrlTransform(url))
 /** Picture sources are checked by MarkdownImage, which only shows local or embedded pictures. */
 const transformUrl = (url: string, key: string): string => (key === 'src' ? url : keepHelpLinks(url))
 
@@ -183,7 +214,7 @@ export const Markdown = memo(function Markdown({
     <div className={`prose-maris selectable ${streaming ? 'caret' : ''}`}>
       <ReactMarkdown
         urlTransform={transformUrl}
-        remarkPlugins={[remarkGfm, remarkMath, remarkPaths]}
+        remarkPlugins={[remarkGfm, remarkMath, remarkPaths, remarkPages]}
         rehypePlugins={[[rehypeHighlight, { detect: false, ignoreMissing: true }], rehypeKatex]}
         components={{
           pre: ({ children }) => {
@@ -204,10 +235,11 @@ export const Markdown = memo(function Markdown({
                 onClick={(e) => {
                   e.preventDefault()
                   if (href?.startsWith('help:')) useApp.getState().openHelp(href.slice(5))
+                  else if (href?.startsWith('page:')) useApp.getState().openPage(href)
                   else if (href && /^https?:/i.test(href)) void api.shell.openExternal(href)
                   else if (href) reveal(href)
                 }}
-                title={href?.startsWith('help:') ? 'Open this help article' : href}
+                title={href?.startsWith('help:') ? 'Open this help article' : href?.startsWith('page:') ? 'Open this page in Maris' : href}
               >
                 {children}
               </a>

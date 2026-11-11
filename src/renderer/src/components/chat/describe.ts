@@ -226,6 +226,10 @@ export function describeCall(call: ToolCallRecord): Described {
       return d('other', 'Asking for full control of this computer', 'Asked for full control of this computer')
     case 'use_connector':
       return d('explore', `Getting ${str(a.service) || 'a connected service'} ready`, `Got ${str(a.service) || 'a connected service'} ready`)
+    case 'maris_help':
+      return d('explore', 'Reading the Maris help', 'Read the Maris help', { subject: str(a.topic) ? quote(str(a.topic), 40) : undefined })
+    case 'maris_status':
+      return d('explore', 'Looking at what is set up in Maris', 'Looked at what is set up in Maris')
     case 'maris_settings':
       return d('explore', "Looking at Maris's settings", "Looked at Maris's settings")
     case 'change_maris_settings':

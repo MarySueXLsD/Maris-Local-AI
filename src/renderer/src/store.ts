@@ -15,6 +15,7 @@ import type {
 } from '@shared/types'
 import { api } from './lib/api'
 import type { NewsState, UpdateState } from '@shared/extensions'
+import { parsePage } from '@shared/pages'
 
 /** Phone-sized screens: the sidebar and the project panel slide over the page instead of sitting beside it. */
 const narrow = (): boolean => typeof window !== 'undefined' && window.innerWidth < 768
@@ -79,10 +80,14 @@ interface State {
   setupOpen: boolean
   /** Article shown on the Help page. */
   helpArticle?: string
+  /** The Settings section to show (set when a page link such as page:settings/phone is opened). */
+  settingsSection?: { id: string; tick: number }
   /** Facts about this copy of Maris and the system it runs on. */
   appInfo?: { version: string; material?: boolean }
 
   openHelp(article?: string): void
+  /** Open one of Maris's own pages from a link in an answer ("page:models/api"). False: no such page. */
+  openPage(link: string): boolean
   openSetup(): void
   closeSetup(): void
   setMode(m: ChatMode): void
@@ -260,6 +265,19 @@ export const useApp = create<State>((set, get) => {
 
     openHelp(article) {
       set((s) => ({ view: 'help', helpArticle: article ?? s.helpArticle ?? 'welcome' }))
+    },
+
+    openPage(link) {
+      const to = parsePage(link)
+      if (!to) return false
+      if (to.mode) get().setMode(to.mode)
+      else if (to.view === 'help') get().openHelp()
+      else if (to.view === 'models') get().openModels(to.tab)
+      else {
+        if (to.view === 'settings' && to.section) set((s) => ({ settingsSection: { id: to.section!, tick: (s.settingsSection?.tick ?? 0) + 1 } }))
+        get().setView(to.view)
+      }
+      return true
     },
 
     openSetup() {

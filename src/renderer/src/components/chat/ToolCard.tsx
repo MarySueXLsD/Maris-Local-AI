@@ -25,6 +25,7 @@ import {
   HardDrive,
   ImagePlus,
   Info,
+  LifeBuoy,
   MessagesSquare,
   OctagonX,
   Search,
@@ -87,7 +88,9 @@ const ICONS: Record<string, LucideIcon> = {
   process_output: ScrollText,
   stop_process: CircleStop,
   dev_environment: Wrench,
-  run_script: FileCode
+  run_script: FileCode,
+  maris_help: LifeBuoy,
+  maris_status: Info
 }
 
 export function DiffView({ diff }: { diff: string }) {

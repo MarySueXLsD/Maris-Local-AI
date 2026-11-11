@@ -3,7 +3,7 @@
 
 export type OsPlatform = 'win32' | 'darwin' | 'linux'
 
-const bridge = (globalThis as { maris?: { platform?: OsPlatform; remote?: boolean } }).maris
+const bridge = (globalThis as { maris?: { platform?: OsPlatform; remote?: boolean; macKeys?: boolean } }).maris
 
 /** The operating system of the computer Maris runs on (in the phone app: the linked computer). */
 export const PLATFORM: OsPlatform = bridge?.platform ?? 'win32'
@@ -20,7 +20,7 @@ export const REMOTE = Boolean(bridge?.remote)
 
 /** Keyboard shortcuts follow the device in front of the user (⌘ on a Mac). */
 export const MAC_KEYS =
-  typeof navigator !== 'undefined' && /Macintosh|Mac OS X/.test(navigator.userAgent) && !/Mobile|Android|iPhone|iPad/.test(navigator.userAgent)
+  bridge?.macKeys ?? (typeof navigator !== 'undefined' && /Macintosh|Mac OS X/.test(navigator.userAgent) && !/Mobile|Android|iPhone|iPad/.test(navigator.userAgent))
 
 /** A touch screen without a mouse (the phone app): keyboard shortcut hints are left out. */
 export const TOUCH = typeof window !== 'undefined' && Boolean(window.matchMedia?.('(hover: none) and (pointer: coarse)').matches)

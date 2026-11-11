@@ -1,6 +1,8 @@
 import type { ChatMode, Settings, TaskCategory, ToolRisk } from '@shared/types'
 import { connectorsInPlay } from '@shared/connectorPresets'
+import { APP_QUESTION, APP_STATE_QUESTION } from '@shared/helpSearch'
 import type { LlmTool } from '../engines/types'
+import { appTools } from './app'
 import { codeTools } from './code'
 import { controlTools } from './control'
 import { fsTools } from './fs'
@@ -14,7 +16,7 @@ import { webTools } from './web'
 import { connectors } from '../connectors/connectors'
 import { skills } from '../skills/skills'
 
-const ALL: ToolDef[] = [...fsTools, ...shellTools, ...codeTools, ...systemTools, ...webTools, ...memoryTools, ...mediaTools, ...settingsTools, ...controlTools]
+const ALL: ToolDef[] = [...fsTools, ...shellTools, ...codeTools, ...systemTools, ...webTools, ...memoryTools, ...mediaTools, ...settingsTools, ...appTools, ...controlTools]
 
 /** Tools that only make sense while working on a project. */
 const CODE_ONLY = new Set(['project_tree', 'grep', 'multi_edit', 'start_process', 'process_output', 'stop_process', 'dev_environment', 'update_plan'])
@@ -107,6 +109,9 @@ const LITE_HINTS: [RegExp, string[]][] = [
   [/\b(remember|don'?t forget|memor(y|ize|ise)|what do you (know|remember) about me)\b|запомни|помнишь/i, ['remember', 'recall']],
   [/\b(forget (that|this|what))\b|забудь/i, ['recall', 'forget']],
   [/\b(theme|dark mode|light mode|text size|font size|maris settings?|your settings?)\b|настройк|тем(а|у) оформлени/i, ['maris_settings', 'change_maris_settings']],
+  // Questions about the app itself: its help is one call away, even in a chat that only talks.
+  [APP_QUESTION, ['maris_help']],
+  [APP_STATE_QUESTION, ['maris_status']],
   [/\bclipboard\b|буфер обмена/i, ['get_clipboard', 'set_clipboard']],
   [/\b(screenshot|my screen|on (the|my) screen)\b|скриншот|на экране/i, ['take_screenshot']],
   [/\b(process(es)?|task manager|running programs?|close (the )?(program|app)|kill)\b|процесс|диспетчер задач/i, ['list_processes', 'kill_process']],

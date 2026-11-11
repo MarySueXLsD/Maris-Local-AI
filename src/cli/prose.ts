@@ -290,7 +290,8 @@ export class Prose {
         this.flushWord()
         const text = link[1] || link[2]
         this.word = text
-        this.wordStyled = this.style.link(text, link[2])
+        // Links to Maris's own pages and help articles open nothing in a terminal: the name is what helps.
+        this.wordStyled = /^(page|help):/i.test(link[2]!) ? this.style.bold(text) : this.style.link(text, link[2]!)
         return this.flushWord()
       }
       this.text('[')
