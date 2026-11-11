@@ -16,10 +16,12 @@ import {
   type ProviderPreset
 } from '@shared/providers'
 import { cleanSecret } from '@shared/connectorPresets'
+import type { Price, PriceSource } from '@shared/pricing'
 import type { ModelInfo } from '@shared/types'
 import { Emitter, errMsg, log, uid } from '../util'
 import { anthropicModels } from './anthropic'
 import { openaiModels } from './openaiCompat'
+import { priceList } from './priceList'
 
 /** How to reach a service: what the engines need for one request. */
 export interface Connection {
@@ -108,12 +110,67 @@ class Providers {
     this.load()
     return this.configs.map((c) => {
       const s = this.state.get(c.id)
-      return { ...c, status: !c.enabled ? 'off' : (s?.status ?? 'ready'), error: s?.error, local: isLocalAddress(c.baseUrl) }
+      const local = isLocalAddress(c.baseUrl)
+      const priced: ProviderInfo['priced'] = {}
+      // A server on this computer or network is not paid per token: no prices to show for it.
+      if (!local) {
+        for (const m of c.models) {
+          const p = this.priceOf(c, m.id, m)
+          if (p) priced[m.id] = p
+        }
+      }
+      return { ...c, status: !c.enabled ? 'off' : (s?.status ?? 'ready'), error: s?.error, local, priced }
     })
+  }
+
+  /** The price in effect for one model: the person's own, else the service's own, else the list price. */
+  private priceOf(c: ProviderConfig, modelId: string, model = c.models.find((m) => m.id === modelId)): { price: Price; source: PriceSource } | undefined {
+    const own = c.prices?.[modelId]
+    if (own) return { price: own, source: 'yours' }
+    const said = model?.price
+    if (said) return { price: said, source: 'service' }
+    const listed = priceList.find(c.preset, modelId)
+    return listed ? { price: listed, source: 'list' } : undefined
+  }
+
+  /** What a model ("@service/model") costs, when that is known. */
+  priceFor(name: string): { price: Price; source: PriceSource } | undefined {
+    const r = parseRemoteModel(name)
+    const c = r ? this.get(r.provider) : undefined
+    return r && c ? this.priceOf(c, r.model) : undefined
+  }
+
+  /** The person's own price for a model (per million tokens); without one, back to the lists. */
+  setPrice(id: string, modelId: string, price?: { in: number; out: number } | null): ProviderInfo[] {
+    const c = this.get(id)
+    if (!c) throw new Error('Unknown service')
+    const prices = { ...(c.prices ?? {}) }
+    if (!price) delete prices[modelId]
+    else {
+      const pIn = Number(price.in)
+      const pOut = Number(price.out)
+      if (!(pIn >= 0) || !(pOut >= 0) || !Number.isFinite(pIn + pOut)) throw new Error('A price is a number of dollars per million tokens, 0 or more.')
+      prices[modelId] = { in: pIn, out: pOut }
+    }
+    c.prices = Object.keys(prices).length ? prices : undefined
+    this.save()
+    this.emit()
+    return this.list()
+  }
+
+  /** The makers' list prices are looked up once a day, while a service that they apply to is in use. */
+  private lookUpPrices(): void {
+    this.load()
+    priceList.refreshStale(this.configs.some((c) => c.enabled && !isLocalAddress(c.baseUrl) && priceList.covers(c.preset)))
   }
 
   private emit(): void {
     this.changed.emit(this.list())
+  }
+
+  /** Something outside changed what the lists show (a newer price list). */
+  refreshed(): void {
+    this.emit()
   }
 
   get(id: string): ProviderConfig | undefined {
@@ -151,6 +208,7 @@ class Providers {
         if (m.tools !== false && !q.noTools) caps.push('tools')
         if (m.vision !== false && !q.noVision) caps.push('vision')
         if (m.thinking && !q.noThink) caps.push('thinking')
+        const priced = local ? undefined : this.priceOf(c, id)
         out.push({
           name,
           sizeBytes: 0,
@@ -159,7 +217,8 @@ class Providers {
           label: remoteModelLabel(name, m.label),
           provider: c.id,
           providerName: c.name,
-          remote: !local
+          remote: !local,
+          ...(priced ? { price: { in: priced.price.in, out: priced.price.out } } : {})
         })
       }
     }
@@ -221,6 +280,7 @@ class Providers {
     this.save()
     this.state.set(config.id, { status: 'ready' })
     this.emit()
+    this.lookUpPrices()
     return this.list()
   }
 
@@ -316,6 +376,7 @@ class Providers {
   /** Once a day, in the background, so new models show up by themselves. */
   refreshStale(maxAgeMs = 24 * 3600_000): void {
     this.load()
+    this.lookUpPrices()
     for (const c of this.configs) {
       if (c.enabled && Date.now() - (c.fetchedAt ?? 0) > maxAgeMs) void this.refresh(c.id).catch(() => undefined)
     }

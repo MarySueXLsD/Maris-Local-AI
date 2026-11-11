@@ -1,9 +1,11 @@
-import { Brain, ChevronRight, Cloud, ExternalLink, Eye, Hammer, KeyRound, Pencil, Plus, RefreshCw, Search, Server, ShieldCheck, Trash2, X } from 'lucide-react'
+import { Brain, ChevronRight, Cloud, Coins, ExternalLink, Eye, Hammer, KeyRound, Pencil, Plus, RefreshCw, Search, Server, ShieldCheck, Trash2, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { priceLabel, priceWords, usd, type PriceSource, type UsageSummary, type UsageTotals } from '@shared/pricing'
 import { looksLikeChatModel, type ProviderInfo, type ProviderModel, type ProviderPreset } from '@shared/providers'
 import { Button, cn, inputCls, RowToggle, Section, Spinner } from '../components/ui'
 import { api } from '../lib/api'
 import { REMOTE } from '../lib/platform'
+import { useApp } from '../store'
 
 // The main process's wording, without the wrapper and without sending the person to the page they are on.
 const clean = (e: unknown): string =>
@@ -18,7 +20,208 @@ const STATUS: Record<ProviderInfo['status'], { word: string; cls: string }> = {
   error: { word: 'Problem', cls: 'bg-danger' }
 }
 
-const kTokens = (n: number): string => (n >= 1_000_000 ? `${Math.round(n / 100_000) / 10}M` : `${Math.round(n / 1000)}K`)
+const kTokens = (n: number): string => (n >= 1_000_000 ? `${Math.round(n / 100_000) / 10}M` : n >= 1000 ? `${Math.round(n / 1000)}K` : String(n))
+
+/** Where a price comes from, as a sentence. */
+const PRICE_FROM: Record<PriceSource, string> = {
+  yours: 'This is the price you set.',
+  service: 'The service itself gives this price.',
+  list: 'From the public list of the makers’ prices.'
+}
+
+/** A sum of use in one tile: what it cost, and the tokens and requests behind it. */
+function UsageTile({ title, t }: { title: string; t: UsageTotals }) {
+  return (
+    <div className="min-w-0 flex-1 rounded-xl border border-line bg-raised/60 px-3.5 py-2.5">
+      <p className="text-[0.76rem] text-text-3">{title}</p>
+      <p className="tabular text-[1.25rem] leading-tight font-semibold text-text">{t.requests ? usd(t.cost) : '$0'}</p>
+      <p className="tabular truncate text-[0.78rem] text-text-2">
+        {t.requests ? `${kTokens(t.input + t.output)} tokens · ${t.requests.toLocaleString('en-US')} request${t.requests === 1 ? '' : 's'}` : 'nothing yet'}
+      </p>
+    </div>
+  )
+}
+
+/**
+ * What the models at API services used and cost. The token counts are the services' own; the costs
+ * are worked out from each model's price, so they are an estimate of the bill, not the bill.
+ */
+function UsagePanel({ list }: { list: ProviderInfo[] }) {
+  const [u, setU] = useState<UsageSummary>()
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [sure, setSure] = useState(false)
+  // Read again when a service changes and whenever an answer finishes.
+  const answering = useApp((s) => Object.values(s.running).filter(Boolean).length)
+  const openSettings = useApp((s) => s.setView)
+  useEffect(() => {
+    void api.providers.usage().then(setU).catch(() => undefined)
+  }, [list, answering])
+  if (!u || (!u.all.requests && !list.some((p) => !p.local))) return null
+  const names = new Map(list.flatMap((p) => p.models.map((m) => [`${p.id}\n${m.id}`, m.label ?? m.id] as [string, string])))
+  const over = u.budget > 0 ? u.month.cost / u.budget : 0
+  return (
+    <Section title="Use and cost" description="What your API models used and what that comes to at their prices. Models on this computer cost nothing per message and are not counted.">
+      {!u.tracking ? (
+        <p className="text-[0.88rem] text-text-2">
+          The record is turned off.{' '}
+          <button className="text-petal underline" onClick={() => openSettings('settings')}>
+            Settings → Engine
+          </button>{' '}
+          turns it on.
+        </p>
+      ) : (
+        <>
+          <div className="flex flex-wrap gap-2.5">
+            <UsageTile title="Today" t={u.today} />
+            <UsageTile title="This month" t={u.month} />
+            <UsageTile title="In all" t={u.all} />
+          </div>
+          {u.budget > 0 && (
+            <div className="mt-3">
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-sunken" aria-hidden>
+                <div className={cn('h-full rounded-full', over >= 1 ? 'bg-danger' : over >= 0.8 ? 'bg-pollen' : 'bg-petal')} style={{ width: `${Math.min(100, over * 100)}%` }} />
+              </div>
+              <p className="mt-1 text-[0.8rem] text-text-2">
+                {usd(u.month.cost)} of the ${u.budget} you set as a monthly guide{over >= 1 ? ': over it' : ''}.
+              </p>
+            </div>
+          )}
+          {u.month.unpriced > 0 && (
+            <p className="mt-2 text-[0.8rem] text-pollen">
+              {u.month.unpriced} request{u.month.unpriced === 1 ? '' : 's'} this month went to a model without a known price: counted in tokens, not in dollars. Set its price in the service’s model list
+              below.
+            </p>
+          )}
+          {u.models.length > 0 && (
+            <div className="mt-3">
+              <button className="inline-flex items-center gap-1 text-[0.84rem] text-text-2 hover:text-text" aria-expanded={open} onClick={() => setOpen(!open)}>
+                <ChevronRight size={14} className={cn('transition-transform', open && 'rotate-90')} /> By model, this month
+              </button>
+              {open && (
+                <div className="mt-2 overflow-x-auto rounded-lg border border-line">
+                  <table className="w-full text-left text-[0.82rem]">
+                    <thead className="text-[0.74rem] text-text-3">
+                      <tr className="border-b border-line">
+                        <th className="px-3 py-1.5 font-normal">Model</th>
+                        <th className="px-3 py-1.5 text-right font-normal">Requests</th>
+                        <th className="px-3 py-1.5 text-right font-normal">Read</th>
+                        <th className="px-3 py-1.5 text-right font-normal">Written</th>
+                        <th className="px-3 py-1.5 text-right font-normal">Cost</th>
+                      </tr>
+                    </thead>
+                    <tbody className="tabular divide-y divide-line">
+                      {u.models.map((m) => (
+                        <tr key={`${m.provider}/${m.model}`}>
+                          <td className="max-w-64 truncate px-3 py-1.5 text-text" title={`${m.model} at ${m.providerName}`}>
+                            {names.get(`${m.provider}\n${m.model}`) ?? m.model} <span className="text-text-3">{m.providerName}</span>
+                          </td>
+                          <td className="px-3 py-1.5 text-right text-text-2">{m.requests.toLocaleString('en-US')}</td>
+                          <td className="px-3 py-1.5 text-right text-text-2" title={m.cacheRead ? `${m.input.toLocaleString('en-US')} tokens, ${m.cacheRead.toLocaleString('en-US')} of them from the service's cache (cheaper)` : `${m.input.toLocaleString('en-US')} tokens`}>
+                            {kTokens(m.input)}
+                          </td>
+                          <td className="px-3 py-1.5 text-right text-text-2" title={`${m.output.toLocaleString('en-US')} tokens`}>
+                            {kTokens(m.output)}
+                          </td>
+                          <td className="px-3 py-1.5 text-right text-text">{m.unpriced >= m.requests ? <span className="text-text-3">no price</span> : `${m.unpriced ? 'over ' : ''}${usd(m.cost)}`}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+          <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[0.78rem] text-text-3">
+            <span className="min-w-0 flex-1 basis-80">
+              The token counts are the services’ own. The costs are an estimate from each model’s price ({u.prices.count} list prices, looked up {u.prices.updated}); what the service bills you is what counts.
+            </span>
+            {!REMOTE && (
+              <>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  title="Read the makers' current prices from the public list again"
+                  onClick={() => {
+                    setBusy(true)
+                    void api.providers
+                      .refreshPrices()
+                      .then(setU)
+                      .finally(() => setBusy(false))
+                  }}
+                >
+                  {busy ? <Spinner className="size-3.5" /> : <RefreshCw size={13} />} Update prices
+                </Button>
+                {u.all.requests > 0 &&
+                  (sure ? (
+                    <>
+                      <Button size="sm" variant="danger" onClick={() => void api.providers.clearUsage().then(setU).finally(() => setSure(false))}>
+                        Clear the record
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setSure(false)}>
+                        Keep it
+                      </Button>
+                    </>
+                  ) : (
+                    <Button size="sm" variant="ghost" onClick={() => setSure(true)}>
+                      <Trash2 size={13} /> Clear
+                    </Button>
+                  ))}
+              </>
+            )}
+          </div>
+        </>
+      )}
+    </Section>
+  )
+}
+
+/** Your own price for a model: dollars per million tokens read and written. */
+function PriceEditor({ p, modelId, onClose }: { p: ProviderInfo; modelId: string; onClose: () => void }) {
+  const eff = p.priced[modelId]
+  const [pin, setPin] = useState(eff ? String(eff.price.in) : '')
+  const [pout, setPout] = useState(eff ? String(eff.price.out) : '')
+  const [error, setError] = useState('')
+  const act = (price?: { in: number; out: number } | null): void => {
+    setError('')
+    void api.providers.setPrice(p.id, modelId, price).then(onClose, (e) => setError(clean(e)))
+  }
+  const field = cn(inputCls, 'tabular h-7 w-24 px-2 py-0 text-[0.82rem]')
+  return (
+    <form
+      className="flex flex-wrap items-center gap-2 border-t border-line bg-sunken/60 px-3 py-2 text-[0.8rem] text-text-2"
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (pin.trim() === '' || pout.trim() === '') return setError('Fill in both prices.')
+        act({ in: Number(pin), out: Number(pout) })
+      }}
+    >
+      <Coins size={14} className="text-text-3" aria-hidden />
+      <span>Dollars per million tokens:</span>
+      <label className="inline-flex items-center gap-1.5">
+        read
+        <input className={field} type="number" min={0} step="any" inputMode="decimal" value={pin} onChange={(e) => setPin(e.target.value)} aria-label="Price per million tokens read, in dollars" autoFocus />
+      </label>
+      <label className="inline-flex items-center gap-1.5">
+        written
+        <input className={field} type="number" min={0} step="any" inputMode="decimal" value={pout} onChange={(e) => setPout(e.target.value)} aria-label="Price per million tokens written, in dollars" />
+      </label>
+      <Button size="sm" type="submit" variant="primary">
+        Save
+      </Button>
+      {eff?.source === 'yours' && (
+        <Button size="sm" type="button" variant="ghost" onClick={() => act(null)}>
+          Forget my price
+        </Button>
+      )}
+      <Button size="sm" type="button" variant="ghost" onClick={onClose}>
+        Cancel
+      </Button>
+      {error && <span className="basis-full text-danger">{error}</span>}
+    </form>
+  )
+}
 
 /** What a service says a model can do, as small badges (nothing shown where it does not say). */
 function Abilities({ m }: { m: ProviderModel }) {
@@ -90,6 +293,8 @@ export function ApiTab() {
         />
       )}
 
+      {list && <UsagePanel list={list} />}
+
       <Section title="Your services">
         {!list ? (
           <Spinner className="size-4" />
@@ -159,6 +364,8 @@ function ProviderRow({ p, open, onToggle, onEdit }: { p: ProviderInfo; open: boo
   const [busy, setBusy] = useState(false)
   const [query, setQuery] = useState('')
   const [extra, setExtra] = useState('')
+  /** The model whose price is being set. */
+  const [pricing, setPricing] = useState<string>()
   const st = STATUS[p.status]
   const picked = useMemo(() => new Set(p.picked), [p.picked])
   const shown = useMemo(() => {
@@ -224,7 +431,31 @@ function ProviderRow({ p, open, onToggle, onEdit }: { p: ProviderInfo; open: boo
                   </span>
                   <Abilities m={m} />
                   {m.contextLength ? <span className="tabular shrink-0 text-[0.76rem] text-text-3">{kTokens(m.contextLength)} context</span> : null}
+                  {/* What it costs per million tokens read / written; a click sets your own price. */}
+                  {!p.local && (p.priced[m.id] || picked.has(m.id)) && (
+                    <button
+                      type="button"
+                      disabled={REMOTE}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        setPricing(pricing === m.id ? undefined : m.id)
+                      }}
+                      title={
+                        p.priced[m.id]
+                          ? `${priceWords(p.priced[m.id]!.price)}. ${PRICE_FROM[p.priced[m.id]!.source]}${REMOTE ? '' : ' Click to set your own.'}`
+                          : 'No price is known for this model, so Maris cannot show what it costs. Click to set one.'
+                      }
+                      aria-label={p.priced[m.id] ? `Price of ${m.label ?? m.id}: ${priceLabel(p.priced[m.id]!.price)} per million tokens read and written` : `Set a price for ${m.label ?? m.id}`}
+                      className={cn(
+                        'tabular w-24 shrink-0 rounded px-1.5 py-0.5 text-right text-[0.76rem] hover:bg-raised',
+                        p.priced[m.id] ? (p.priced[m.id]!.source === 'yours' ? 'text-petal' : 'text-text-2') : 'text-text-3 underline decoration-dotted'
+                      )}
+                    >
+                      {p.priced[m.id] ? priceLabel(p.priced[m.id]!.price) : 'set price'}
+                    </button>
+                  )}
                 </label>
+                {pricing === m.id && <PriceEditor p={p} modelId={m.id} onClose={() => setPricing(undefined)} />}
               </li>
             ))}
           </ul>

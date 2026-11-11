@@ -10,6 +10,7 @@ import type {
   SkillInfo,
   UpdateState
 } from '@shared/extensions'
+import type { UsageSummary } from '@shared/pricing'
 import type { ProviderInfo, ProviderPreset } from '@shared/providers'
 import type {
   ApprovalRequest,
@@ -290,6 +291,13 @@ export interface MarisApi {
     setPicked(id: string, picked: string[]): Promise<ProviderInfo[]>
     /** Read the service's models again. */
     refresh(id: string): Promise<ProviderInfo[]>
+    /** What the models at API services used and cost: today, this month, in all, and per model. */
+    usage(): Promise<UsageSummary>
+    clearUsage(): Promise<UsageSummary>
+    /** Your own price for a model, in dollars per million tokens. Without one: back to the lists. */
+    setPrice(id: string, model: string, price?: { in: number; out: number } | null): Promise<ProviderInfo[]>
+    /** Look the public price list up now. */
+    refreshPrices(): Promise<UsageSummary>
     onChange(cb: (s: ProviderInfo[]) => void): Off
   }
   link: {

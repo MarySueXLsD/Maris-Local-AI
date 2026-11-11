@@ -55,6 +55,8 @@ const BLOCKED = new Set([
   'providers:add',
   'providers:edit',
   'providers:remove',
+  'providers:setPrice',
+  'providers:clearUsage',
   // The terminal command belongs to this computer.
   'cli:show',
   'cli:status',

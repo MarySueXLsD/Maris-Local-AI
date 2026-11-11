@@ -4,6 +4,8 @@
 // model that comes out tomorrow shows up without a new version of Maris. Pure, shared by the main
 // process and the interface.
 
+import type { Price, PriceSource } from './pricing'
+
 /** How Maris talks to a service: Claude's Messages API, or the OpenAI chat-completions format. */
 export type ProviderKind = 'anthropic' | 'openai'
 
@@ -139,6 +141,12 @@ export interface ProviderModel {
   thinkingMode?: 'adaptive' | 'budget'
   /** When the service released it (ms), for showing the newest first. */
   created?: number
+  /** What the service itself says it costs, when its model list carries prices. */
+  price?: Price
+  /** Thinking can be turned off for it ({type: "disabled"}); false where the service refuses that. */
+  thinkingOff?: boolean
+  /** It takes an effort setting, and "high" is one of the levels. */
+  effortHigh?: boolean
 }
 
 export interface ProviderConfig {
@@ -156,6 +164,8 @@ export interface ProviderConfig {
   picked: string[]
   fetchedAt?: number
   createdAt: number
+  /** Prices the person set themselves, by model id (they win over every list). */
+  prices?: Record<string, Price>
 }
 
 export interface ProviderInfo extends ProviderConfig {
@@ -163,6 +173,8 @@ export interface ProviderInfo extends ProviderConfig {
   error?: string
   /** Nothing sent to it leaves this computer or home network. */
   local: boolean
+  /** The price in effect for each model that has one, and where it comes from. */
+  priced: Record<string, { price: Price; source: PriceSource }>
 }
 
 // ------------------------------------------------------------------ names

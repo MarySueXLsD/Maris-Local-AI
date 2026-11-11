@@ -19,7 +19,8 @@ writeFileSync(path.join(work, 'beta.md'), 'b')
 const mock = await startMockLlm()
 // No model on this computer: everything has to come from the services.
 const profile = makeProfile('api', { ollamaUrl: mock.url, comfyUrl: `${mock.url}/comfy` })
-const { app, win, logs } = await launch(profile)
+// The public price list is looked up from the stand-in, and only when the test asks for it.
+const { app, win, logs } = await launch(profile, { MARIS_PRICE_LIST_URL: `${mock.url}/prices` })
 const d = driver(win, shots)
 const t = checker()
 const quirks = () => {
@@ -30,10 +31,20 @@ const quirks = () => {
   }
 }
 const visibleText = () => win.locator('main').innerText()
-/** The Think button goes auto → on → off: click until it says on. */
-const thinkOn = async () => {
-  for (let i = 0; i < 3 && !(await win.getByRole('button', { name: 'Think: on' }).count()); i++) await win.getByRole('button', { name: /^Think: / }).click()
+/** The Think button goes auto → on → off: click until it says what is wanted. */
+const thinkTo = async (mode) => {
+  for (let i = 0; i < 3 && !(await win.getByRole('button', { name: `Think: ${mode}` }).count()); i++) await win.getByRole('button', { name: /^Think: / }).click()
 }
+const thinkOn = () => thinkTo('on')
+/** Choose a model for the next new chat by its full name (two services may both offer a "mock-large"). */
+const pickByName = (name) => win.evaluate((n) => window.__marisStore.getState().setChatModel(n), name)
+/** The numbers kept with the last answer of the open chat. */
+const lastStats = () =>
+  win.evaluate(async () => {
+    const r = await window.maris.conv.get(window.__marisStore.getState().currentId)
+    return r.messages.filter((m) => m.role === 'assistant').pop().stats ?? {}
+  })
+const services = () => win.evaluate(() => window.maris.providers.list())
 
 try {
   await win.waitForTimeout(1200)
@@ -203,6 +214,35 @@ try {
   const old = mock.of('claude-mock-old').pop()?.body ?? {}
   t.check(/Hello from claude-mock-old/.test(await d.lastAnswer()) && old.max_tokens === 8192 && old.thinking?.type === 'enabled' && old.thinking.budget_tokens < 8192, `an older model gets what it supports (${JSON.stringify(old.thinking)}, max ${old.max_tokens})`)
 
+  // ---- thinking, exactly the way each model takes it
+  // "On", chosen by the person: more effort where the model has that setting, and only there.
+  await d.newChat()
+  await d.pickModel('Claude Mock 5')
+  await thinkTo('on')
+  await d.send('Hello with thinking on')
+  await d.waitDone()
+  const hard = mock.of('claude-mock-5').pop().body
+  t.check(hard.thinking?.type === 'adaptive' && hard.output_config?.effort === 'high', `"Think: on" asks a model with an effort setting for more of it (${JSON.stringify(hard.output_config)})`)
+  t.check(old.output_config === undefined, 'a model without that setting is not sent it')
+  // "Off": really off where the model list says the model takes that (it would think by default) …
+  await d.newChat()
+  await d.pickModel('Claude Mock 5')
+  await thinkTo('off')
+  await d.send('Hello with thinking off')
+  await d.waitDone()
+  const quiet = mock.of('claude-mock-5').pop().body
+  t.check(quiet.thinking?.type === 'disabled' && quiet.output_config === undefined && (await win.getByText(/Thought for/).count()) === 0, `"Think: off" turns thinking off for a model that thinks by default (${JSON.stringify(quiet.thinking)})`)
+  // … and where it cannot be turned off, the thinking is at least shown instead of running unseen.
+  await win.evaluate(() => window.maris.providers.setPicked('anthropic', ['claude-mock-5', 'claude-mock-always', 'claude-mock-old', 'claude-mock-small']))
+  await win.waitForTimeout(400)
+  await d.newChat()
+  await d.pickModel('Claude Mock Always')
+  await d.send('Hello to a model that always thinks')
+  await d.waitDone()
+  const always = mock.of('claude-mock-always').pop().body
+  t.check(/Hello from claude-mock-always/.test(await d.lastAnswer()) && always.thinking?.type === 'adaptive' && always.thinking.display === 'summarized' && (await win.getByText(/Thought for/).count()) > 0, 'a model whose thinking cannot be turned off shows it')
+  await thinkTo('auto')
+
   // ---- context windows up to millions of tokens, and never more than a model takes
   const context = (model) => win.evaluate((m) => window.maris.chat.context(undefined, { mode: 'chat', model: m }), model)
   const before64 = await context('@anthropic/claude-mock-5')
@@ -246,28 +286,117 @@ try {
   t.check(learned.window < 60000 && learned.window > 40000, `the real size is used from then on (${learned.window})`)
   await d.setSettings({ routing: { apiContext: 65536 } })
 
+  // ---- what it costs: a price from the service, none at all, one from the public list, and your own
+  const added = await win.evaluate(([url, key]) => window.maris.providers.add('custom', { key, baseUrl: url, name: 'Mock Paid' }), [`http://localhost.:${mock.port}/v1`, mock.key])
+  const paid = added.find((p) => p.name === 'Mock Paid')
+  t.check(paid && !paid.local && paid.priced['mock-large']?.source === 'service' && paid.priced['mock-large'].price.in === 2 && paid.priced['mock-large'].price.out === 10, `a service that lists its own prices is believed (${JSON.stringify(paid?.priced['mock-large'])})`)
+  t.check(Object.keys(added.find((p) => p.id === 'custom').priced).length === 0, 'a server on this computer has no price per token')
+  await d.newChat()
+  await pickByName(`@${paid.id}/mock-large`)
+  await d.send('Hello, what does this cost?')
+  await d.waitDone()
+  const st = await lastStats()
+  t.check(st.costUsd > 0 && Math.abs(st.costUsd - (st.promptTokens * 2 + st.outputTokens * 10) / 1e6) < 1e-9, `an answer is priced from the tokens the service reports (${st.promptTokens} read, ${st.outputTokens} written: $${st.costUsd?.toFixed(6)})`)
+  t.check(/\$0\.0\d+/.test(await visibleText()), 'what it cost is shown under the answer')
+  await d.shot('api-14-cost')
+
+  await d.newChat()
+  await d.pickModel('Claude Mock 5')
+  await d.send('Hello without a price')
+  await d.waitDone()
+  const unknown = await lastStats()
+  t.check(unknown.costUsd === undefined && unknown.costPartial === true && /cost not known/.test(await visibleText()), 'a model without a known price says so instead of guessing')
+
+  const looked = await win.evaluate(() => window.maris.providers.refreshPrices())
+  t.check(mock.counts.priceLookups === 1 && looked.prices.count >= 20, `the public price list is looked up when asked (${looked.prices.count} prices), and not before`)
+  const listed = (await services()).find((p) => p.id === 'anthropic').priced
+  t.check(listed['claude-mock-5']?.source === 'list' && listed['claude-mock-5'].price.in === 4 && listed['claude-mock-5'].price.out === 20, 'a model gets its maker’s list price by name')
+  t.check(listed['claude-mock-old'] === undefined, 'a variant of another model is not taken for it')
+  await d.newChat()
+  await d.pickModel('Claude Mock 5')
+  await d.send('Hello with a list price')
+  await d.waitDone()
+  const byList = await lastStats()
+  t.check(byList.costUsd > 0 && !byList.costPartial, `then its answers are priced ($${byList.costUsd?.toFixed(6)})`)
+
+  await win.evaluate(() => window.maris.providers.setPrice('anthropic', 'claude-mock-old', { in: 50000, out: 50000 }))
+  const mine = (await services()).find((p) => p.id === 'anthropic').priced['claude-mock-old']
+  t.check(mine?.source === 'yours' && mine.price.in === 50000, 'your own price for a model is used')
+  const bad = await win.evaluate(() => window.maris.providers.setPrice('anthropic', 'claude-mock-old', { in: -1, out: 5 }).then(() => 'saved', (e) => String(e.message)))
+  t.check(/0 or more/.test(bad), 'a price below zero is refused')
+
+  // ---- the monthly guide: said once when it is passed, never a stop
+  await d.setSettings({ usage: { monthlyBudget: 1 } })
+  await d.newChat()
+  await d.pickModel('Claude Mock Old')
+  await d.send('Hello at a steep price')
+  await d.waitDone()
+  t.check(/Hello from claude-mock-old/.test(await d.lastAnswer()) && /more than the \$1\.00 you set as a monthly guide/.test(await visibleText()), 'passing the monthly guide is said in the chat, and the answer still comes')
+  await d.shot('api-15-guide')
+  await d.newChat()
+  await d.pickModel('Claude Mock Old')
+  await d.send('Hello again at a steep price')
+  await d.waitDone()
+  t.check(!/monthly guide/.test(await visibleText()), 'it is not repeated with every answer')
+
+  // ---- the record: per model, in tokens and dollars, without the server on this computer
+  const use = await win.evaluate(() => window.maris.providers.usage())
+  const steep = use.models.find((m) => m.model === 'claude-mock-old')
+  t.check(use.month.requests >= 6 && use.month.cost > 1 && use.today.cost === use.month.cost, `the record adds up (${use.month.requests} requests, $${use.month.cost.toFixed(2)} this month)`)
+  t.check(steep?.cost > 1 && use.models[0].model === 'claude-mock-old', 'the model that cost most comes first')
+  t.check(use.month.unpriced >= 1 && use.models.some((m) => m.model === 'claude-mock-5' && m.unpriced >= 1 && m.input > 0), 'requests without a known price are counted in tokens')
+  t.check(!use.models.some((m) => m.provider === 'custom') && use.models.some((m) => m.provider === paid.id), 'the server on this computer is not in it, the paid service is')
+
+  await win.getByRole('button', { name: 'Models', exact: true }).click()
+  await win.getByRole('tab', { name: /API/ }).click()
+  await win.getByRole('heading', { name: 'Use and cost' }).waitFor()
+  await win.getByRole('button', { name: /By model, this month/ }).click()
+  await win.getByRole('columnheader', { name: 'Written' }).waitFor()
+  t.check((await win.getByText(/of the \$1 you set as a monthly guide: over it/).count()) === 1, 'Models → API shows the totals and the guide')
+  await win.getByRole('heading', { name: 'Use and cost' }).evaluate((el) => el.scrollIntoView({ block: 'start' }))
+  await win.waitForTimeout(300)
+  await d.shot('api-16-use-and-cost')
+  await win.getByRole('button', { name: 'Show the models of Claude (Anthropic)' }).click()
+  const chip = win.getByRole('button', { name: /Price of Claude Mock 5: \$4 \/ \$20/ })
+  await chip.waitFor()
+  await chip.scrollIntoViewIfNeeded()
+  await chip.click()
+  await win.getByRole('spinbutton', { name: /tokens read/ }).fill('3')
+  await win.getByRole('spinbutton', { name: /tokens written/ }).fill('15')
+  await d.shot('api-17-set-price')
+  await win.getByRole('button', { name: 'Save', exact: true }).click()
+  await win.getByRole('button', { name: /Price of Claude Mock 5: \$3 \/ \$15/ }).waitFor()
+  await win.getByRole('button', { name: /Price of Claude Mock 5: \$3 \/ \$15/ }).click()
+  await win.getByRole('button', { name: 'Forget my price' }).click()
+  await win.getByRole('button', { name: /Price of Claude Mock 5: \$4 \/ \$20/ }).waitFor()
+  t.check(true, 'a price can be set by hand next to the model, and forgotten again')
+  await d.setSettings({ usage: { monthlyBudget: 0 } })
+  await win.evaluate((id) => window.maris.providers.remove(id), paid.id)
+  await win.waitForTimeout(300)
+
   // ---- Auto with nothing on this computer: an API model answers, since there is nothing else
   await d.newChat()
   await d.send('Hello with no roles set')
   await d.waitDone(20000).catch(() => undefined)
-  await d.shot('api-13-auto-only-api')
+  await d.shot('api-13b-auto-only-api')
   t.check(/Hello from (mock|claude)/.test(await d.lastAnswer()), 'with no model on this computer, Auto answers with an API model')
   await d.setSettings({ tiers: { fast: '@custom/mock-large', balanced: '@custom/mock-large', max: '@anthropic/claude-mock-5' } })
   await d.newChat()
   await d.send('Hello through Auto')
   await d.waitDone()
   t.check(/Hello from (mock-large|claude-mock-5)/.test(await d.lastAnswer()), `Auto uses API models that hold a role: ${(await d.lastAnswer()).slice(0, 60)}`)
-  await d.shot('api-14-auto-api')
+  await d.shot('api-13c-auto-api')
 
   // ---- the model menu and the Models page with services in place
   await win.locator('button[aria-label^="Model:"]').click()
   await win.waitForTimeout(250)
-  await d.shot('api-15-model-menu')
+  t.check((await win.getByRole('menu').getByText('$50000 / $50000').count()) === 1, 'the model menu shows what a model costs')
+  await d.shot('api-18-model-menu')
   await win.keyboard.press('Escape')
   await win.getByRole('button', { name: 'Models', exact: true }).click()
   await win.getByRole('tab', { name: /Text/ }).click()
   await win.waitForTimeout(500)
-  await d.shot('api-16-models-text-tab')
+  await d.shot('api-19-models-text-tab')
 
   // ---- turned off: its models leave the menu, and a chat that used one says why it cannot answer
   mock.addLocalModel('mock-local:1b', { caps: ['completion', 'tools'] })

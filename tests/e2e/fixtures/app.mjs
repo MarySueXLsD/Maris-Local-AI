@@ -23,6 +23,8 @@ export function makeProfile(name, settings = {}) {
     dataDir: path.join(dir, 'data'),
     updates: { check: false, news: false },
     memory: { autoLearn: false },
+    // The price list is not looked up online unless a test asks for it (and then from the stand-in).
+    usage: { priceLookup: false },
     ...settings,
     engine: { stopOllamaOnQuit: false, ...(settings.engine ?? {}) }
   }

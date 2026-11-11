@@ -3,6 +3,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Attachment, ApprovalRequest, ChatEvent, ChatMessage, MediaJob, Part, RouteDecision, ThinkMode, ToolCallRecord } from '@shared/types'
 import { approvalKind, kindLabel } from '@shared/approval'
+import { usd } from '@shared/pricing'
 import { describeCall, imperative } from '../renderer/src/components/chat/describe'
 import { duration, prettyModel } from '../renderer/src/lib/format'
 import type { Rpc } from './connect'
@@ -338,7 +339,7 @@ export class Session {
             return resolveDone('stopped')
           }
           if (io.ui.isTTY) {
-            const bits = [prettyModel(this.lastModel), e.stats?.durationMs ? duration(e.stats.durationMs) : '', e.stats?.tokensPerSec ? `${e.stats.tokensPerSec} tok/s` : '']
+            const bits = [prettyModel(this.lastModel), e.stats?.durationMs ? duration(e.stats.durationMs) : '', e.stats?.tokensPerSec ? `${e.stats.tokensPerSec} tok/s` : '', e.stats?.costUsd !== undefined ? `${e.stats.costPartial ? 'over ' : ''}${usd(e.stats.costUsd)}` : '']
             io.ui.write(`${p.dim(`${m}${bits.filter(Boolean).join(` ${s.dot} `)}`)}\n`)
           }
           return resolveDone('done')

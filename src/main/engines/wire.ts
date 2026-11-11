@@ -74,7 +74,7 @@ export function readModel(m: RawModel): ProviderModel | undefined {
 }
 
 /** The models in a /models reply: `{ data: [...] }`, `{ models: [...] }` or a bare list. */
-export function readModelList(reply: unknown): ProviderModel[] {
+export function readModelList(reply: unknown, extra?: (raw: Record<string, unknown>) => Partial<ProviderModel>): ProviderModel[] {
   const list = Array.isArray(reply)
     ? reply
     : Array.isArray((reply as { data?: unknown })?.data)
@@ -82,7 +82,13 @@ export function readModelList(reply: unknown): ProviderModel[] {
       : Array.isArray((reply as { models?: unknown })?.models)
         ? (reply as { models: unknown[] }).models
         : []
-  return (list as RawModel[]).map((m) => (m && typeof m === 'object' ? readModel(m) : undefined)).filter((m): m is ProviderModel => Boolean(m))
+  return (list as RawModel[])
+    .map((m) => {
+      const model = m && typeof m === 'object' ? readModel(m) : undefined
+      // What only the adapter can read (a service's own prices, say) is added to what was understood here.
+      return model && extra ? { ...model, ...extra(m) } : model
+    })
+    .filter((m): m is ProviderModel => Boolean(m))
 }
 
 export interface OpenAiMessage {

@@ -83,6 +83,21 @@ CREATE TABLE IF NOT EXISTS projects (
   last_opened INTEGER NOT NULL,
   json TEXT NOT NULL DEFAULT '{}'
 );
+
+CREATE TABLE IF NOT EXISTS api_usage (
+  day TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  provider_name TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL,
+  requests INTEGER NOT NULL DEFAULT 0,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cost REAL NOT NULL DEFAULT 0,
+  unpriced INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, provider, model)
+);
 `
 
 /** Columns added after the first release; created on demand. */
@@ -396,5 +411,59 @@ export const repo = {
   },
   deleteMedia(id: string): void {
     db.prepare('DELETE FROM media WHERE id = ?').run(id)
+  },
+
+  // ------------------------------------------------------------ use of API models
+  /** Add one request to its day's line for that model. */
+  addApiUsage(u: ApiUsageRow): void {
+    db.prepare(
+      `INSERT INTO api_usage(day, provider, provider_name, model, requests, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, cost, unpriced)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(day, provider, model) DO UPDATE SET
+         provider_name = excluded.provider_name,
+         requests = requests + excluded.requests,
+         input_tokens = input_tokens + excluded.input_tokens,
+         cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
+         cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens,
+         output_tokens = output_tokens + excluded.output_tokens,
+         cost = cost + excluded.cost,
+         unpriced = unpriced + excluded.unpriced`
+    ).run(u.day, u.provider, u.providerName, u.model, u.requests, u.input, u.cacheRead, u.cacheWrite, u.output, u.cost, u.unpriced)
+  },
+  /** Every line from a day on (all of them without one), oldest first. */
+  apiUsage(sinceDay?: string): ApiUsageRow[] {
+    const rows = (sinceDay ? db.prepare('SELECT * FROM api_usage WHERE day >= ? ORDER BY day').all(sinceDay) : db.prepare('SELECT * FROM api_usage ORDER BY day').all()) as Row[]
+    return rows.map((r) => ({
+      day: String(r.day),
+      provider: String(r.provider),
+      providerName: String(r.provider_name),
+      model: String(r.model),
+      requests: Number(r.requests),
+      input: Number(r.input_tokens),
+      cacheRead: Number(r.cache_read_tokens),
+      cacheWrite: Number(r.cache_write_tokens),
+      output: Number(r.output_tokens),
+      cost: Number(r.cost),
+      unpriced: Number(r.unpriced)
+    }))
+  },
+  clearApiUsage(): void {
+    db.prepare('DELETE FROM api_usage').run()
   }
+}
+
+/** One day's use of one model of a service. */
+export interface ApiUsageRow {
+  /** The local date, as 2026-11-11. */
+  day: string
+  provider: string
+  providerName: string
+  model: string
+  requests: number
+  input: number
+  cacheRead: number
+  cacheWrite: number
+  output: number
+  cost: number
+  unpriced: number
 }

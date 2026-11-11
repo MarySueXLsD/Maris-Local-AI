@@ -26,7 +26,9 @@ import { processes } from './tools/processes'
 import { CATALOG, cancelInstall, installModel, pulls } from './catalog'
 import { repo } from './db'
 import { ollama } from './engines/ollama'
+import { priceList } from './engines/priceList'
 import { providers } from './engines/providers'
+import { usage } from './engines/usage'
 import { backupDir, isInside } from './tools/paths'
 import { comfy } from './media/comfy'
 import { cancelDownload, downloads } from './media/downloader'
@@ -107,6 +109,8 @@ export function registerIpc(): void {
     invalidateModels()
     broadcast('providers:changed', s)
   })
+  // A newer price list changes the prices shown next to the models.
+  priceList.changed.on(() => providers.refreshed())
   setup.changed.on((p) => broadcast('setup:progress', p))
 
   // ---------------------------------------------------------------- chat
@@ -502,6 +506,16 @@ export function registerIpc(): void {
   h('providers:remove', (id: string) => providers.remove(id))
   h('providers:setEnabled', (id: string, on: boolean) => providers.setEnabled(id, Boolean(on)))
   h('providers:setPicked', (id: string, picked: string[]) => providers.setPicked(id, Array.isArray(picked) ? picked.map(String) : []))
+  h('providers:usage', () => usage.summary())
+  h('providers:clearUsage', () => {
+    usage.clear()
+    return usage.summary()
+  })
+  h('providers:setPrice', (id: string, model: string, price?: { in: number; out: number } | null) => providers.setPrice(String(id), String(model), price))
+  h('providers:refreshPrices', async () => {
+    await priceList.refresh()
+    return usage.summary()
+  })
   h('providers:refresh', (id: string) => providers.refresh(id))
 
   // ---------------------------------------------------------------- Maris Link (desktop window only)

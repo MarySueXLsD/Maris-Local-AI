@@ -28,6 +28,8 @@ const ALLOWED = new Set([
   'conv:rename',
   'conv:running',
   'models:list',
+  // What the API models used and cost (maris status).
+  'providers:usage',
   'system:status',
   'settings:get',
   'media:generate',

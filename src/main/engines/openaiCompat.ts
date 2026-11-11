@@ -3,6 +3,7 @@
 // model by name. A request starts out plain; when a service refuses an option or a feature, its error
 // reply says which, and that is dropped, remembered (Quirks) and the request sent again.
 import type { ProviderModel } from '@shared/providers'
+import { readPricing } from '@shared/pricing'
 import { looseJson } from '@shared/textTools'
 import { log } from '../util'
 import type { Connection, Quirks } from './providers'
@@ -50,7 +51,8 @@ export async function openaiModels(conn: Connection): Promise<ProviderModel[]> {
   } catch {
     throw new Error(`${conn.name} did not answer with a list of models. Is the address right? It usually ends in /v1.`)
   }
-  return readModelList(reply)
+  // What the service itself says its models cost (OpenRouter and a few others do).
+  return readModelList(reply, (raw) => ({ price: readPricing(raw.pricing) }))
 }
 
 /** Server-sent events: yields the JSON of each "data:" line until [DONE]. */
@@ -148,7 +150,18 @@ export async function* openaiChat(conn: Connection, model: string, req: LlmReque
 
     const calls = new Map<number, { id?: string; name: string; args: string }>()
     const tags = new ThinkTags()
-    let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined
+    // Services name cached tokens in different places; a few also say what the request cost.
+    let usage:
+      | {
+          prompt_tokens?: number
+          completion_tokens?: number
+          prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number }
+          prompt_cache_hit_tokens?: number
+          cache_read_input_tokens?: number
+          cache_creation_input_tokens?: number
+          cost?: number
+        }
+      | undefined
     let finish: string | undefined
     let outChars = 0
     for await (const ev of sse(res)) {
@@ -235,6 +248,9 @@ export async function* openaiChat(conn: Connection, model: string, req: LlmReque
       done_reason: refused ? 'refusal' : cut ? 'length' : toolCalls.length ? 'tool_calls' : 'stop',
       done_note: refused ? `${conn.name} filtered this answer.` : cut ? 'The answer reached the length limit and was cut off.' : undefined,
       prompt_eval_count: usage?.prompt_tokens,
+      cache_read_count: usage?.prompt_tokens_details?.cached_tokens ?? usage?.prompt_cache_hit_tokens ?? usage?.cache_read_input_tokens,
+      cache_write_count: usage?.prompt_tokens_details?.cache_write_tokens ?? usage?.cache_creation_input_tokens,
+      ...(typeof usage?.cost === 'number' && usage.cost >= 0 ? { cost_usd: usage.cost } : {}),
       eval_count: outTokens,
       eval_duration: evalMs * 1e6,
       total_duration: (Date.now() - t0) * 1e6

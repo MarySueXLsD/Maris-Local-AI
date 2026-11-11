@@ -573,7 +573,7 @@ You can see your models, their roles and their sizes on the **Models** page.`
     title: 'Claude, GPT and other API models',
     category: `Your ${DEVICE} and models`,
     summary: `Adding a model service with an API key, picking its models, and what leaves your ${DEVICE}.`,
-    keywords: 'api key claude anthropic openai gpt gemini google openrouter groq mistral deepseek grok xai lm studio llama.cpp cloud service remote provider bill cost',
+    keywords: 'api key claude anthropic openai gpt gemini google openrouter groq mistral deepseek grok xai lm studio llama.cpp cloud service remote provider bill cost price pricing usage tokens spend money budget',
     body: `Besides the models on your ${DEVICE}, Maris can answer with models that run **somewhere else**: Claude, GPT, Gemini and many more. You need an account with the service and its **API key** (a long password meant for programs). This is optional: without it, nothing changes.
 
 It is also a good way to get strong, fast answers on a ${DEVICE} that is too slow for big models.
@@ -608,9 +608,27 @@ Chats with models on your ${DEVICE} stay on your ${DEVICE}, as before. Services 
 
 Keys are stored encrypted with the system keychain, are only ever sent to their own service, and are never shown again. **Remove** deletes a service together with its key.
 
+## What it costs
+
+A service charges your account for the **tokens** a model reads and writes (a token is about ¾ of a word), at a price per million tokens that differs from model to model.
+
+- **Under each answer** from an API model Maris shows what it came to, for example **$0.012**. Point at it to see the tokens behind it.
+- **Models → API → Use and cost** adds it up: today, this month and in all, and per model.
+- **Next to each model** is its price, for example **$4 / $20**: dollars per million tokens read and written. The model menu of a chat shows it too.
+
+The token counts are the service’s own. The prices come from the service where it lists them, otherwise from a public list of the makers’ prices that Maris looks up once a day (at openrouter.ai; nothing about you is sent, and Settings → Engine turns it off). So a new model is priced without a new version of Maris. Click a price to set **your own**: for a model the list does not know, or a rate you agreed with the service.
+
+All of this is an **estimate**; what the service bills you is what counts. A long chat is sent again with every message, so its messages cost more as it grows. Services charge much less for the part they have cached.
+
+**A monthly guide.** Settings → Engine → *Monthly guide for API costs* takes an amount in dollars. Maris tells you in the chat when the month’s costs pass 80% of it, and again when they pass it. It never stops answering because of it.
+
+The record stays on this ${DEVICE}. **Clear** on the same page empties it, and Settings → Engine → *Keep a record of API use* turns it off.
+
 ## When a model cannot do something
 
 Models differ: some cannot use tools, see pictures or think step by step, and some services refuse certain options. Maris learns this from the service (its model list, or its first refusal), adapts the request and remembers. For a model without tool calling, for example, it describes the tools in plain text instead. There is nothing to set up.
+
+Thinking differs too. Some newer models think by themselves unless told not to, and a few cannot be told. With **Think: off** Maris turns thinking off where the model allows it; where it does not, the thinking is shown rather than left running unseen. **Think: on** asks such a model for more effort.
 
 ## When an answer is declined or cut short
 

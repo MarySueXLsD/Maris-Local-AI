@@ -15,6 +15,8 @@ computer, what goes over the network and when, and what is never collected.
   The one exception is a model you add yourself through an API key; see "API models" below.
 - **Keys and tokens** you give Maris (API keys, connectors, the admin token, a search key) are encrypted
   with your system's keychain and never shown again.
+- **The record of what your API models used and cost**, per day and model, in the same database.
+  Models → API shows it and can clear it; Settings → Engine turns it off.
 
 ## When Maris uses the network
 
@@ -29,6 +31,7 @@ Only for these things, and only when they happen:
 | Skills | The git repository or address you paste | When you install or update a skill |
 | Connectors | The service you connected (GitHub, Notion, …) | When Maris uses one of its tools for you |
 | API models | The service whose key you added (Anthropic, OpenAI, Google, OpenRouter, …) | When a chat is answered by one of that service's models, and when Maris reads its list of models (on adding it, on Refresh and once a day) |
+| List prices of API models | openrouter.ai (its public list of models and prices) | Once a day, only while a service on the internet is set up and Settings → Engine → "Look up list prices" is on. A plain download: no key, nothing about you or your chats |
 | Phone link | Your phone, on your own network only, encrypted | When you pair a phone and use it |
 
 What Maris sends in a web search is the search words for that question. Connectors send what a tool

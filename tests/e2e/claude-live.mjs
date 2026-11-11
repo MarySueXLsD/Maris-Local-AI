@@ -1,6 +1,7 @@
 // A live check of the Claude integration, with a real key against the real service: reads the model
-// list, then runs a plain answer, tool use, reading a file, thinking, an approved file change, a
-// picture and Stop through several models.
+// list, then runs a plain answer, tool use, reading a file, thinking (on, off, and together with a
+// tool), an approved file change, a picture and Stop through several models, and adds up what the
+// service counted and what that comes to at each model's price.
 //
 // Unlike the other tests this one costs money on the account whose key is used (short prompts: from
 // a few cents to a dollar or two, depending on the models), so it only runs when you start it:
@@ -183,12 +184,15 @@ try {
   for (const info of chosen) {
     const model = `@anthropic/${info.id}`
     const name = info.label ?? info.id
-    const row = { name, id: info.id, checks: {}, tokensIn: 0, tokensOut: 0, ms: 0, notes: [] }
+    const row = { name, id: info.id, checks: {}, tokensIn: 0, tokensOut: 0, cached: 0, cost: 0, priced: true, ms: 0, notes: [] }
     results.push(row)
     const note = (check, m, ok, detail) => {
       row.checks[check] = ok
       row.tokensIn += m?.stats?.promptTokens ?? 0
       row.tokensOut += m?.stats?.outputTokens ?? 0
+      row.cached += m?.stats?.cacheReadTokens ?? 0
+      row.cost += m?.stats?.costUsd ?? 0
+      if (m?.stats && (m.stats.costUsd === undefined || m.stats.costPartial)) row.priced = false
       row.ms += m?.stats?.durationMs ?? 0
       const why = m?.error ?? detail ?? ''
       if (!ok) exitCode = 1
@@ -229,6 +233,20 @@ try {
       note('think', last, !timedOut && last?.status === 'done' && /391/.test(textOf(last)), `answered: ${textOf(last).slice(0, 160)}`)
     })
 
+    // Thinking and a tool in one turn: the model's own thinking has to go back to it unchanged with the result.
+    await run('thinktool', async () => {
+      const { last, timedOut } = await ask(model, `List the files in this folder and reply with only the file names, comma-separated: ${work}`, { think: 'on' })
+      const used = toolsOf(last).some((c) => c.name === 'list_dir' && c.status === 'done')
+      note('thinktool', last, !timedOut && last?.status === 'done' && used && /alpha\.txt/.test(textOf(last)), used ? `answered: ${textOf(last).slice(0, 160)}` : `no list_dir call; answered: ${textOf(last).slice(0, 160)}`)
+    })
+
+    // Thinking turned off by the person: the answer has to come all the same, whatever the model allows.
+    await run('quiet', async () => {
+      const { last, timedOut } = await ask(model, 'Reply with exactly one word: quiet', { think: 'off' })
+      row.quietThought = last?.parts.some((p) => p.type === 'thinking' && p.text.trim()) ? 'thought anyway (shown)' : 'no thinking shown'
+      note('quiet', last, !timedOut && last?.status === 'done' && /quiet/i.test(textOf(last)), `answered: ${textOf(last).slice(0, 120)}`)
+    })
+
     await run('write', async () => {
       const target = path.join(work, `made-by-${info.id.replace(/[^\w.-]+/g, '_')}.txt`)
       const first = await ask(model, `Create a text file at ${target} containing exactly this text: hello from Claude`, { untilApproval: true })
@@ -260,6 +278,10 @@ try {
     await win.screenshot({ path: path.join(shots, `claude-live-${info.id.replace(/[^\w.-]+/g, '_')}.png`) }).catch(() => undefined)
   }
 
+  // ---- what it came to: the prices in effect, and Maris's own record of the run
+  const pricedNow = (await win.evaluate(() => window.maris.providers.list())).find((p) => p.id === 'anthropic')?.priced ?? {}
+  const record = await win.evaluate(() => window.maris.providers.usage())
+
   // ---- what Maris had to learn along the way (nothing, when the model list told the truth)
   let learned = {}
   try {
@@ -269,7 +291,12 @@ try {
   }
 
   // ---- report
-  const CHECKS = ['pong', 'tool', 'read', 'think', 'write', 'picture', 'stop'].filter((c) => !ONLY.size || ONLY.has(c))
+  const CHECKS = ['pong', 'tool', 'read', 'think', 'thinktool', 'quiet', 'write', 'picture', 'stop'].filter((c) => !ONLY.size || ONLY.has(c))
+  const money = (n) => (n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`)
+  const priceOf = (id) => {
+    const p = pricedNow[id]
+    return p ? `$${p.price.in} / $${p.price.out} (${p.source === 'list' ? 'list price' : p.source === 'yours' ? 'your price' : 'from the service'})` : 'not known'
+  }
   const mark = (v) => (v === true ? 'pass' : v === false ? 'FAIL' : v === null ? 'n/a' : '-')
   const lines = [
     '# Claude live test',
@@ -280,6 +307,15 @@ try {
     `| --- | ${CHECKS.map(() => '---').join(' | ')} | --- | --- | --- |`,
     ...results.map((r) => `| ${r.name} (\`${r.id}\`) | ${CHECKS.map((c) => mark(r.checks[c])).join(' | ')} | ${r.thought ?? '-'} | ${r.tokensIn} / ${r.tokensOut} | ${Math.round(r.ms / 1000)} s |`),
     '',
+    'What it came to, as Maris shows it (an estimate from each model’s price; the bill at the service is what counts):',
+    '',
+    '| Model | price per 1M read / written | tokens read | of them cached | written | cost | with "Think: off" |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
+    ...results.map((r) => `| ${r.name} | ${priceOf(r.id)} | ${r.tokensIn} | ${r.cached} | ${r.tokensOut} | ${r.priced ? money(r.cost) : r.cost ? `over ${money(r.cost)}` : 'not known'} | ${r.quietThought ?? '-'} |`),
+    `| **All** | | ${results.reduce((a, r) => a + r.tokensIn, 0)} | ${results.reduce((a, r) => a + r.cached, 0)} | ${results.reduce((a, r) => a + r.tokensOut, 0)} | **${money(results.reduce((a, r) => a + r.cost, 0))}** | |`,
+    '',
+    `Maris's own record for this run: ${record.month.requests} requests, ${record.month.input + record.month.output} tokens, ${money(record.month.cost)}${record.month.unpriced ? ` (${record.month.unpriced} requests without a price)` : ''}.`,
+    '',
     `Learned from refusals: ${Object.keys(learned).length ? `\`${JSON.stringify(learned)}\`` : 'nothing (every request was accepted as sent).'}`
   ]
   const notes = results.flatMap((r) => r.notes.map((n) => `- ${r.name}: ${n}`))
@@ -289,8 +325,6 @@ try {
   const report = path.join(shots, 'claude-live-report.md')
   writeFileSync(report, `${lines.join('\n')}\n`)
   console.log(`\n${lines.slice(4).join('\n')}\n\nReport: ${report}`)
-  const total = results.reduce((s, r) => s + r.tokensIn + r.tokensOut, 0)
-  console.log(`About ${Math.round(total / 1000)}K tokens were used in all.`)
 } catch (e) {
   exitCode = 1
   console.error(`Stopped: ${clean(e)}`)

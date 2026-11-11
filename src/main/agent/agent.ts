@@ -23,6 +23,7 @@ import { messageText, repo } from '../db'
 import { llm } from '../engines/llm'
 import { API_CONTEXT_SIZES, RING_CONTEXT_SIZES, sizesFor, usableWindow } from '@shared/context'
 import { contextOverflow } from '../engines/errors'
+import { usage } from '../engines/usage'
 import { isRunnerCrash, ollama } from '../engines/ollama'
 import { providers } from '../engines/providers'
 import type { LlmMessage, LlmTool, LlmToolCall } from '../engines/types'
@@ -584,7 +585,7 @@ class Agent {
     this.emitMessage(msg)
     let userText = ''
     const started = Date.now()
-    const stats = { prompt: 0, out: 0, evalNs: 0, loadNs: 0 }
+    const stats = { prompt: 0, out: 0, evalNs: 0, loadNs: 0, cacheRead: 0, cacheWrite: 0, cost: 0, priced: false, unpriced: false, billed: false }
     try {
       const cfg = settings.get()
       const lite = isLite(cfg)
@@ -854,7 +855,7 @@ class Agent {
             }
           }, 1500)
           try {
-            for await (const chunk of llm.chat({ model, messages, tools: llmTools.length ? llmTools : undefined, think: decision.think, options }, ctrl.signal)) {
+            for await (const chunk of llm.chat({ model, messages, tools: llmTools.length ? llmTools : undefined, think: decision.think, thinkHard: decision.think && (opts.think ?? cfg.agent.defaultThink) === 'on', options }, ctrl.signal)) {
               if (chunk.restart) {
                 // The engine had to send the request again: what this step showed so far is void.
                 resetStep()
@@ -903,6 +904,16 @@ class Agent {
                 stats.out += chunk.eval_count ?? 0
                 stats.evalNs += chunk.eval_duration ?? 0
                 stats.loadNs += chunk.load_duration ?? 0
+                stats.cacheRead += chunk.cache_read_count ?? 0
+                stats.cacheWrite += chunk.cache_write_count ?? 0
+                // A model at a service on the internet is paid per token: its cost goes on the answer.
+                if (models.find((x) => x.name === model)?.remote === true) {
+                  stats.billed = true
+                  if (chunk.cost_usd !== undefined) {
+                    stats.cost += chunk.cost_usd
+                    stats.priced = true
+                  } else stats.unpriced = true
+                }
                 raw = chunk.raw
                 endNote = chunk.done_note
               }
@@ -1054,7 +1065,19 @@ class Agent {
         outputTokens: stats.out || undefined,
         tokensPerSec: stats.evalNs ? Math.round((stats.out / (stats.evalNs / 1e9)) * 10) / 10 : undefined,
         durationMs: Date.now() - started,
-        loadMs: stats.loadNs ? Math.round(stats.loadNs / 1e6) : undefined
+        loadMs: stats.loadNs ? Math.round(stats.loadNs / 1e6) : undefined,
+        cacheReadTokens: stats.cacheRead || undefined,
+        cacheWriteTokens: stats.cacheWrite || undefined,
+        costUsd: stats.priced ? stats.cost : undefined,
+        costPartial: stats.billed && stats.unpriced ? true : undefined
+      }
+      // The monthly guide for API costs (Settings → Engine): said once when 80% is passed, once at 100%.
+      if (stats.billed) {
+        const note = usage.budgetNote()
+        if (note) {
+          msg.parts.push({ type: 'notice', text: note, tone: 'warn' })
+          this.emitPart(msg, msg.parts.length - 1)
+        }
       }
       repo.saveMessage(msg)
       this.emitStatus(msg)

@@ -1,5 +1,6 @@
 import { Check, ChevronDown, Cloud, Gauge, KeyRound, Mountain, Server, Settings2, Sparkles, Zap } from 'lucide-react'
 import { DropdownMenu } from 'radix-ui'
+import { priceLabel } from '@shared/pricing'
 import type { ModelInfo, Tier } from '@shared/types'
 import { bytes, prettyModel } from '../../lib/format'
 import { useApp } from '../../store'
@@ -109,6 +110,11 @@ export function ModelPicker({ value, onChange }: { value: string; onChange: (m: 
                 {theirs.map((m) => (
                   <DropdownMenu.Item key={m.name} className="menu-item" onSelect={() => onChange(m.name)}>
                     <span className="min-w-0 flex-1 truncate">{m.label ?? prettyModel(m.name)}</span>
+                    {m.price && (
+                      <span className="tabular shrink-0 text-[0.74rem] text-text-3" title="Dollars per million tokens read / written">
+                        {priceLabel(m.price)}
+                      </span>
+                    )}
                     {value === m.name && <Check size={15} />}
                   </DropdownMenu.Item>
                 ))}

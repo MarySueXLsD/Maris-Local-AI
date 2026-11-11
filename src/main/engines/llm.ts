@@ -14,6 +14,7 @@ import { ollama } from './ollama'
 import { openaiChat } from './openaiCompat'
 import { providers } from './providers'
 import { CapabilityError, type LlmChunk, type LlmMessage, type LlmRequest, type LlmResult, type LlmToolCall, type ModelTraits } from './types'
+import { usage } from './usage'
 
 const NO_PICTURE = '[A picture was attached here, but this model cannot see pictures.]'
 
@@ -160,6 +161,31 @@ class Llm {
    * once more (that happens before any answer text, so nothing is shown twice).
    */
   async *chat(req: LlmRequest, signal?: AbortSignal): AsyncGenerator<LlmChunk> {
+    if (!isRemoteModel(req.model)) {
+      yield* this.shaped(req, signal)
+      return
+    }
+    // A model at a service: every request is counted, with the tokens the service reports, and priced.
+    let chars = 0
+    let reached = false
+    let ended = false
+    try {
+      for await (const c of this.shaped(req, signal)) {
+        reached = true
+        chars += (c.message?.content?.length ?? 0) + (c.message?.thinking?.length ?? 0)
+        if (c.done) {
+          ended = true
+          yield usage.account(req, c, chars) ?? c
+        } else yield c
+      }
+    } finally {
+      // Stopped part-way: the service charges for what it read and wrote all the same.
+      if (reached && !ended) usage.account(req, undefined, chars)
+    }
+  }
+
+  /** The request, shaped to what the model can do, and shaped again when it turns out it cannot. */
+  private async *shaped(req: LlmRequest, signal?: AbortSignal): AsyncGenerator<LlmChunk> {
     const traits = await this.traits(req.model)
     let r: LlmRequest = { ...req }
     if (!traits.thinking) r.think = undefined

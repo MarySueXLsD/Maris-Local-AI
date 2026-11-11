@@ -12,6 +12,9 @@ const OFFICIAL = 'https://api.anthropic.com'
 const isOfficial = (conn: Connection): boolean => conn.baseUrl.replace(/\/+$/, '') === OFFICIAL
 
 const clients = new Map<string, Anthropic>()
+/** Models that refused an extra the model list said they take (kept while Maris runs). */
+const refusedOff = new Set<string>()
+const refusedEffort = new Set<string>()
 
 function client(conn: Connection): Anthropic {
   if (!conn.key) throw new Error(`No API key is saved for ${conn.name}. Add it in Models → API.`)
@@ -58,6 +61,9 @@ export async function anthropicModels(conn: Connection): Promise<ProviderModel[]
         tools: true,
         thinking: caps ? Boolean(caps.thinking?.supported) : undefined,
         thinkingMode: adaptive ? 'adaptive' : budget ? 'budget' : undefined,
+        // Newer models think unless told not to, and some cannot be told: the list says which.
+        thinkingOff: caps?.thinking?.types?.disabled ? Boolean(caps.thinking.types.disabled.supported) : undefined,
+        effortHigh: caps?.effort ? Boolean(caps.effort.supported && caps.effort.high?.supported) : undefined,
         created: Number.isFinite(created) ? created : undefined
       })
     }
@@ -95,9 +101,17 @@ export async function* anthropicChat(conn: Connection, model: string, info: Prov
   }
   // Thinking is only asked for in the way the model list says this model supports. Left out, each
   // model does what it does by default, which every model accepts.
-  if (req.think) {
-    if (info?.thinkingMode === 'adaptive') params.thinking = { type: 'adaptive', display: 'summarized' }
-    else if (info?.thinkingMode === 'budget' && maxTokens >= 4096) params.thinking = { type: 'enabled', budget_tokens: Math.min(8000, maxTokens - 2048) }
+  if (req.think !== undefined && info?.thinkingMode === 'adaptive') {
+    // The model decides how much to think, and its thinking is shown as a summary. A model that thinks
+    // whatever is asked (the list says it cannot be turned off) is shown too, rather than thinking unseen.
+    if (req.think || info.thinkingOff === false) params.thinking = { type: 'adaptive', display: 'summarized' }
+    // Thinking off, where the list says the model takes that. (Newer models think by default, so
+    // leaving the option out would not turn it off.)
+    else if (info.thinkingOff && !refusedOff.has(model)) params.thinking = { type: 'disabled' }
+    // "Think: on" set by the person asks for more effort, where the model has that setting.
+    if (req.thinkHard && info.effortHigh && params.thinking?.type === 'adaptive' && !refusedEffort.has(model)) params.output_config = { effort: 'high' }
+  } else if (req.think && info?.thinkingMode === 'budget' && maxTokens >= 4096) {
+    params.thinking = { type: 'enabled', budget_tokens: Math.min(8000, maxTokens - 2048) }
   }
   // Each step of a task repeats the instructions, tools and conversation so far: cached, they cost a fraction.
   if (official) params.cache_control = { type: 'ephemeral' }
@@ -166,6 +180,8 @@ export async function* anthropicChat(conn: Connection, model: string, info: Prov
         done_reason: stop === 'refusal' ? 'refusal' : stop === 'max_tokens' || stop === 'model_context_window_exceeded' ? 'length' : calls.length ? 'tool_calls' : 'stop',
         done_note: note,
         prompt_eval_count: u.input_tokens + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0),
+        cache_read_count: u.cache_read_input_tokens ?? 0,
+        cache_write_count: u.cache_creation_input_tokens ?? 0,
         eval_count: u.output_tokens,
         eval_duration: Math.max(1, Date.now() - (firstAt || t0)) * 1e6,
         total_duration: (Date.now() - t0) * 1e6,
@@ -175,6 +191,24 @@ export async function* anthropicChat(conn: Connection, model: string, info: Prov
       return
     } catch (e) {
       if (signal?.aborted) throw e
+      // Two options are extras the model list said the model takes. If the service refuses one after
+      // all, it is left out from then on and the request sent again as it would have been without it.
+      if (e instanceof Anthropic.BadRequestError && !wrote) {
+        if (params.output_config && /effort|output_config/i.test(e.message)) {
+          refusedEffort.add(model)
+          delete params.output_config
+          log.info('anthropic', `${model} refused the effort setting; going on without it`)
+          attempt--
+          continue
+        }
+        if (params.thinking?.type === 'disabled' && /thinking|disabled/i.test(e.message)) {
+          refusedOff.add(model)
+          delete params.thinking
+          log.info('anthropic', `${model} does not take thinking off; going on with its default`)
+          attempt--
+          continue
+        }
+      }
       if (e instanceof Anthropic.BadRequestError && params.thinking && /thinking/i.test(e.message)) throw new CapabilityError('thinking', e.message)
       if (e instanceof Anthropic.BadRequestError && messages.some((m) => Array.isArray(m.content) && m.content.some((b) => b.type === 'image')) && /image|vision/i.test(e.message)) throw new CapabilityError('vision', e.message)
       if (e instanceof Anthropic.APIError) throw new Error(explain(conn, e, model))

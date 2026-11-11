@@ -6,6 +6,7 @@ import { existsSync, fstatSync, mkdirSync, readFileSync, statSync, writeFileSync
 import path from 'node:path'
 import readline from 'node:readline'
 import type { Attachment, Conversation, MediaJob, MediaParams, ModelInfo, Settings, SystemStatus, ThinkMode } from '@shared/types'
+import { usd, type UsageSummary } from '@shared/pricing'
 import { type Args, parse, Usage } from './args'
 import { bytes, duration, prettyModel } from '../renderer/src/lib/format'
 import { connect, profileDir, type Rpc } from './connect'
@@ -300,6 +301,12 @@ async function status(rpc: Rpc): Promise<number> {
         : p.bad('Ollama is not running')
   )
   if (st.lite) row('Mode', 'low-power')
+  // What the models at API services came to this month (an older Maris that is still running has no such record).
+  const use = await rpc.call<UsageSummary>('providers:usage').catch(() => undefined)
+  if (use?.month.requests) {
+    const m = use.month
+    row('API use', `${usd(m.cost)} this month ${p.dim(`(${Math.round((m.input + m.output) / 1000)}K tokens, ${m.requests} request${m.requests === 1 ? '' : 's'}${m.unpriced ? `, ${m.unpriced} without a known price` : ''})`)}`)
+  }
   row('Pictures', !st.comfy.installed ? p.dim('not set up (Studio in the app)') : st.comfy.busy ? `drawing${st.comfy.queue ? `, ${st.comfy.queue} waiting` : ''}` : st.comfy.up ? 'ready' : p.dim('starts when needed'))
   row('Load', st.busy === 'heavy' ? p.gold('heavy: answers use smaller models') : st.busy === 'busy' ? p.gold('busy') : st.busy)
   return 0

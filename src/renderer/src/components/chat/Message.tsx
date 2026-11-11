@@ -1,7 +1,8 @@
 import { Check, ChevronRight, Clapperboard, Cloud, Copy, Cpu, FileCode2, FileText, FolderOpen, Gauge, Image as ImageIcon, ImagePlay, Mountain, Pencil, RefreshCw, Sparkles, ThumbsDown, ThumbsUp, Zap } from 'lucide-react'
 import { DropdownMenu, Popover } from 'radix-ui'
 import { memo, useEffect, useRef, useState } from 'react'
-import type { ApprovalRequest, ChatMessage, MediaResult, MessageActivity, Part, RouteDecision, Tier, ToolCallRecord } from '@shared/types'
+import { usd } from '@shared/pricing'
+import type { ApprovalRequest, ChatMessage, MediaResult, MessageActivity, MessageStats, Part, RouteDecision, Tier, ToolCallRecord } from '@shared/types'
 import { api } from '../../lib/api'
 import { REMOTE } from '../../lib/platform'
 import { useMediaSrc } from '../Media'
@@ -13,6 +14,14 @@ import { ActivityGroup, TurnSummaryLine, WorkLog, type WorkItem } from './Activi
 import { FullControlPrompt } from './FullControlPrompt'
 import { modelLabel } from './ModelPicker'
 import { ToolCard } from './ToolCard'
+
+/** What an answer from an API model cost, in a sentence: the dollars, and the tokens they are for. */
+function costWords(s: MessageStats): string {
+  const n = (x?: number): string => (x ?? 0).toLocaleString('en-US')
+  const read = `${n(s.promptTokens)} tokens read${s.cacheReadTokens ? ` (${n(s.cacheReadTokens)} of them from the service's cache, which is cheaper)` : ''}, ${n(s.outputTokens)} written`
+  if (s.costUsd === undefined) return `No price is known for this model, so Maris cannot say what this answer cost: ${read}. You can set a price in Models → API.`
+  return `About ${usd(s.costUsd)} at the model's price${s.costPartial ? ', not counting a part that could not be priced' : ''}: ${read}. An estimate; what the service bills you is what counts.`
+}
 
 const TIER_ICON: Record<string, typeof Zap> = { fast: Zap, balanced: Gauge, max: Mountain, tiny: Sparkles, custom: Sparkles }
 const TIER_NAME: Record<string, string> = { fast: 'Fast', balanced: 'Balanced', max: 'Max', tiny: 'Tiny', custom: 'Chosen model' }
@@ -506,6 +515,13 @@ function AssistantMessage({ m, approvals }: { m: ChatMessage; approvals: Approva
               >
                 <span tabIndex={0} className="tabular px-2 text-[0.76rem] text-text-3">
                   {simple ? `Answered in ${duration(m.stats.durationMs)}` : `${m.stats.tokensPerSec} tok/s in ${duration(m.stats.durationMs)}`}
+                </span>
+              </Tip>
+            )}
+            {(m.stats?.costUsd !== undefined || m.stats?.costPartial) && (
+              <Tip label={costWords(m.stats)}>
+                <span tabIndex={0} className="tabular px-1 text-[0.76rem] text-text-3">
+                  {m.stats.costUsd !== undefined ? `${m.stats.costPartial ? 'over ' : ''}${usd(m.stats.costUsd)}` : 'cost not known'}
                 </span>
               </Tip>
             )}

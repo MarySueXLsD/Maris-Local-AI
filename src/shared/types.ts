@@ -32,6 +32,8 @@ export interface ModelInfo {
   providerName?: string
   /** What is sent to this model leaves the computer (false for services on this computer or home network). */
   remote?: boolean
+  /** For a model at an API service: dollars per million tokens read and written, when that is known. */
+  price?: { in: number; out: number }
 }
 
 export interface LoadedModel {
@@ -330,6 +332,13 @@ export interface MessageStats {
   tokensPerSec?: number
   durationMs?: number
   loadMs?: number
+  /** For an answer from an API service: prompt tokens the service had cached, and ones it cached now. */
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  /** What the answer cost in dollars, as far as the model's price is known. */
+  costUsd?: number
+  /** Part of the answer could not be priced (no price is known for the model). */
+  costPartial?: boolean
 }
 
 export interface ChatMessage {
@@ -898,6 +907,15 @@ export interface Settings {
     explain: 'everyone' | 'developer'
   }
   system: { monitorIntervalSec: number }
+  /** What models at API services use and cost. */
+  usage: {
+    /** Keep a record of the tokens each API model used and what that cost. */
+    track: boolean
+    /** Look up the makers' list prices online once a day (only while a service on the internet is set up). */
+    priceLookup: boolean
+    /** A monthly amount in dollars to be told about when API use passes it. 0: none. */
+    monthlyBudget: number
+  }
   /** New versions and news posts, from a GitHub repository (releases and its news/ folder). */
   updates: {
     /** Look for new versions while online. */

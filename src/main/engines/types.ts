@@ -43,6 +43,8 @@ export interface LlmRequest {
   messages: LlmMessage[]
   tools?: LlmTool[]
   think?: boolean
+  /** The person turned thinking on themselves ("Think: on"), rather than Maris deciding the task needs it. */
+  thinkHard?: boolean
   /** Ask for JSON: "json" for any object, or a JSON schema the answer must follow. */
   format?: 'json' | Record<string, unknown>
   /**
@@ -69,6 +71,14 @@ export interface LlmChunk {
   prompt_eval_duration?: number
   eval_count?: number
   eval_duration?: number
+  /** Of the prompt tokens: read from the service's cache, and written to it for the next request. */
+  cache_read_count?: number
+  cache_write_count?: number
+  /**
+   * What the request cost in dollars: reported by the service where it says, otherwise worked out
+   * from the known price (engines/usage.ts). Absent when no price is known.
+   */
+  cost_usd?: number
   error?: string
   /** See LlmMessage.raw. */
   raw?: unknown

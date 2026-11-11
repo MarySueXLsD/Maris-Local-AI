@@ -2,7 +2,7 @@
 // Usage: npm run build && node tests/e2e/smoke.mjs <shotsDir> [steps...]
 // Steps: ui, chat, tools, approve, deny, views (default: all). Uses a throwaway profile.
 import { _electron as electron } from 'playwright-core'
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -98,7 +98,10 @@ try {
     const toolRows = simpleRows + detailedRows
     const waited = await win.locator('[role="group"][aria-label^="Approval needed"]').count()
     check(toolRows > 0 && waited === 0, `read-only tool ran without approval (${toolRows} step(s), ${waited} approval prompt(s))`)
-    check(/fs\.ts|shell\.ts|classify/i.test(await lastAnswer()), 'answer mentions real files')
+    // A small model may name the files or sum them up ("18 files: tools for …"); either shows it read the folder.
+    const inFolder = readdirSync(path.join(root, 'src', 'main', 'tools')).length
+    const told = await lastAnswer()
+    check(/fs\.ts|shell\.ts|classify/i.test(told) || new RegExp(`\\b${inFolder}\\b`).test(told), `answer mentions real files, or how many there are (${inFolder})`)
     await shot('04-tools')
   }
 

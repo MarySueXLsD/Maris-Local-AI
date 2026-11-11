@@ -12,8 +12,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 /** The OpenAI-format models, and what each is there to exercise. */
 const OPENAI_MODELS = [
-  // Does everything: tools, usage numbers.
-  { id: 'mock-large', created: 1790000000, context_length: 128000 },
+  // Does everything: tools, usage numbers, and its own prices (per token, the way OpenRouter lists them).
+  { id: 'mock-large', created: 1790000000, context_length: 128000, pricing: { prompt: '0.000002', completion: '0.00001', input_cache_read: '0.0000002' } },
   // Thinks first (reasoning_content), then answers.
   { id: 'mock-reasoner', created: 1789000000, context_length: 64000 },
   // Refuses tool definitions: Maris has to describe the tools in text instead.
@@ -29,7 +29,12 @@ const OPENAI_MODELS = [
   { id: 'mock-tts-1', created: 1783000000 }
 ]
 
+const EFFORT = { supported: true, low: { supported: true }, medium: { supported: true }, high: { supported: true }, xhigh: { supported: true }, max: { supported: true } }
+const NO_EFFORT = { supported: false, low: { supported: false }, medium: { supported: false }, high: { supported: false }, xhigh: null, max: { supported: false } }
+const thinks = (adaptive, enabled, disabled) => ({ supported: adaptive || enabled, types: { adaptive: { supported: adaptive }, enabled: { supported: enabled }, disabled: { supported: disabled }, between_tools: { supported: false } } })
+
 const CLAUDE_MODELS = [
+  // The newest kind: thinks by itself unless told not to, shows its thinking only when asked to.
   {
     type: 'model',
     id: 'claude-mock-5',
@@ -37,8 +42,21 @@ const CLAUDE_MODELS = [
     created_at: '2026-09-01T00:00:00Z',
     max_input_tokens: 1000000,
     max_tokens: 64000,
-    capabilities: { image_input: { supported: true }, thinking: { supported: true, types: { adaptive: { supported: true }, enabled: { supported: false } } } }
+    thinksByDefault: true,
+    capabilities: { image_input: { supported: true }, thinking: thinks(true, false, true), effort: EFFORT }
   },
+  // Thinking that cannot be turned off.
+  {
+    type: 'model',
+    id: 'claude-mock-always',
+    display_name: 'Claude Mock Always',
+    created_at: '2026-10-01T00:00:00Z',
+    max_input_tokens: 1000000,
+    max_tokens: 64000,
+    thinksByDefault: true,
+    capabilities: { image_input: { supported: true }, thinking: thinks(true, false, false), effort: EFFORT }
+  },
+  // An older kind: thinking by budget, only when asked, no effort setting, no pictures.
   {
     type: 'model',
     id: 'claude-mock-old',
@@ -46,7 +64,7 @@ const CLAUDE_MODELS = [
     created_at: '2025-02-01T00:00:00Z',
     max_input_tokens: 200000,
     max_tokens: 8192,
-    capabilities: { image_input: { supported: false }, thinking: { supported: true, types: { adaptive: { supported: false }, enabled: { supported: true } } } }
+    capabilities: { image_input: { supported: false }, thinking: thinks(false, true, true), effort: NO_EFFORT }
   },
   // A small window: the conversation and the room asked for the answer have to fit in it together.
   {
@@ -56,7 +74,7 @@ const CLAUDE_MODELS = [
     created_at: '2024-06-01T00:00:00Z',
     max_input_tokens: 22000,
     max_tokens: 16000,
-    capabilities: { image_input: { supported: true }, thinking: { supported: false, types: { adaptive: { supported: false }, enabled: { supported: false } } } }
+    capabilities: { image_input: { supported: true }, thinking: thinks(false, false, true), effort: NO_EFFORT }
   }
 ]
 
@@ -145,7 +163,7 @@ function latest(msgs, textOf) {
 export async function startMockLlm({ key = 'test-key', host = '127.0.0.1', port: wantPort = 0 } = {}) {
   /** Every request received, oldest first: { api, path, model, body, headers }. */
   const requests = []
-  const counts = { slowStarted: 0, slowAborted: 0, comfy: 0, unloads: [] }
+  const counts = { slowStarted: 0, slowAborted: 0, comfy: 0, unloads: [], priceLookups: 0 }
   const tooLongSaid = new Set()
   /** Ollama's side: installed models, and which are loaded right now. */
   const local = new Map()
@@ -295,8 +313,13 @@ export async function startMockLlm({ key = 'test-key', host = '127.0.0.1', port:
     if (!Number.isInteger(body.max_tokens) || body.max_tokens < 1) return err('invalid_request_error', 'max_tokens: Field required')
     if (body.max_tokens > info.max_tokens) return err('invalid_request_error', `max_tokens: ${body.max_tokens} > ${info.max_tokens}, which is the maximum allowed number of output tokens for ${info.id}`)
     for (const k of ['temperature', 'top_p', 'top_k']) if (body[k] !== undefined) return err('invalid_request_error', `${k}: Extra inputs are not permitted for this model`)
+    if (body.output_config?.effort !== undefined) {
+      const level = info.capabilities.effort[body.output_config.effort]
+      if (!info.capabilities.effort.supported || !level?.supported) return err('invalid_request_error', `output_config.effort: this model does not support effort "${body.output_config.effort}"`)
+    }
     if (body.thinking) {
       const types = info.capabilities.thinking.types
+      if (body.thinking.type === 'disabled' && !types.disabled.supported) return err('invalid_request_error', 'thinking.type.disabled is not supported for this model: its thinking cannot be turned off')
       if (body.thinking.type === 'adaptive' && !types.adaptive.supported) return err('invalid_request_error', 'thinking.type: adaptive thinking is not supported on this model')
       if (body.thinking.type === 'enabled' && !types.enabled.supported) return err('invalid_request_error', 'thinking.type.enabled is not supported for this model. Use thinking.type.adaptive')
       if (body.thinking.type === 'enabled' && !(body.thinking.budget_tokens >= 1024 && body.thinking.budget_tokens < body.max_tokens)) return err('invalid_request_error', 'thinking.budget_tokens: must be at least 1024 and less than max_tokens')
@@ -371,11 +394,17 @@ export async function startMockLlm({ key = 'test-key', host = '127.0.0.1', port:
       index++
     }
     if (step.kind === 'refuse') return finish('refusal', { stop_details: { type: 'refusal', category: 'other', explanation: 'This is the mock declining on purpose.' } })
-    if (body.thinking) {
+    // Asked to think, or a model that thinks unless told not to. Its text only comes when it was asked
+    // for (older models always show it); the block and its signature come either way.
+    const thinking = body.thinking ? body.thinking.type !== 'disabled' : Boolean(info.thinksByDefault)
+    const shown = body.thinking?.display === 'summarized' || body.thinking?.type === 'enabled'
+    if (thinking) {
       ev('content_block_start', { index, content_block: { type: 'thinking', thinking: '', signature: '' } })
-      for (const w of words('The person wants something simple. I will do exactly that.')) {
-        ev('content_block_delta', { index, delta: { type: 'thinking_delta', thinking: w } })
-        await sleep(10)
+      if (shown) {
+        for (const w of words('The person wants something simple. I will do exactly that.')) {
+          ev('content_block_delta', { index, delta: { type: 'thinking_delta', thinking: w } })
+          await sleep(10)
+        }
       }
       ev('content_block_delta', { index, delta: { type: 'signature_delta', signature: 'mock-signature' } })
       ev('content_block_stop', { index })
@@ -497,6 +526,12 @@ export async function startMockLlm({ key = 'test-key', host = '127.0.0.1', port:
     const url = new URL(req.url, 'http://x')
     const p = url.pathname
     try {
+      // ---- The public price list (MARIS_PRICE_LIST_URL points here in tests).
+      if (p === '/prices') {
+        counts.priceLookups++
+        const filler = Array.from({ length: 24 }, (_, i) => ({ id: `openai/mock-filler-${i}`, pricing: { prompt: '0.000001', completion: '0.000002' } }))
+        return send(res, 200, { data: [{ id: 'anthropic/claude-mock-5', pricing: { prompt: '0.000004', completion: '0.00002', input_cache_read: '0.0000002' } }, { id: 'anthropic/claude-mock-old:extended', pricing: { prompt: '0.00009', completion: '0.00009' } }, ...filler] })
+      }
       // ---- ComfyUI: not there.
       if (p.startsWith('/comfy')) {
         counts.comfy++
@@ -518,7 +553,7 @@ export async function startMockLlm({ key = 'test-key', host = '127.0.0.1', port:
         // The SDK sends the key as a bearer token since API version 2026-10-21; older clients as X-Api-Key.
         if (req.headers.authorization !== `Bearer ${key}` && req.headers['x-api-key'] !== key) return send(res, 401, { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } })
         if (!req.headers['anthropic-version']) return send(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'anthropic-version: header is required' } })
-        if (p === '/anthropic/v1/models' && req.method === 'GET') return send(res, 200, { data: CLAUDE_MODELS, has_more: false, first_id: CLAUDE_MODELS[0].id, last_id: CLAUDE_MODELS[CLAUDE_MODELS.length - 1].id })
+        if (p === '/anthropic/v1/models' && req.method === 'GET') return send(res, 200, { data: CLAUDE_MODELS.map(({ thinksByDefault, ...m }) => m), has_more: false, first_id: CLAUDE_MODELS[0].id, last_id: CLAUDE_MODELS[CLAUDE_MODELS.length - 1].id })
         if (p === '/anthropic/v1/messages' && req.method === 'POST') {
           const body = await readBody(req)
           requests.push({ api: 'anthropic', path: p, model: body.model, body, headers: req.headers })

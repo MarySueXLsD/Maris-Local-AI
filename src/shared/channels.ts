@@ -192,6 +192,10 @@ export const API_CHANNELS = {
     setEnabled: 'providers:setEnabled',
     setPicked: 'providers:setPicked',
     refresh: 'providers:refresh',
+    usage: 'providers:usage',
+    clearUsage: 'providers:clearUsage',
+    setPrice: 'providers:setPrice',
+    refreshPrices: 'providers:refreshPrices',
     onChange: 'providers:changed'
   },
   link: {
