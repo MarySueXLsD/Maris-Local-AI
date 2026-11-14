@@ -45,7 +45,7 @@
     "@capacitor/core": "^8.6.0",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@tailwindcss/vite": "^4.3.4",
-    "@types/node": "^24.0.0",
+    "@types/node": "^26.6.6",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/turndown": "^5.0.5",
