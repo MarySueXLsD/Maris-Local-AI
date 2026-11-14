@@ -1,7 +1,7 @@
 {
   "name": "maris",
   "productName": "Maris",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Maris — a private, local AI assistant for Windows, macOS, Linux and Android: chat, computer agent with approvals, memory, web browsing, and image/video generation.",
   "main": "./out/main/index.js",
   "author": "MarySue",
