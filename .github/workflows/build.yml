@@ -146,11 +146,15 @@ jobs:
           else
             ./gradlew assembleDebug
           fi
+          # One flat folder: a wildcard over apk/<variant>/ would keep the variant folder in the artifact,
+          # and the release step only looks at the top of dist/.
+          mkdir -p "$RUNNER_TEMP/apk"
+          cp app/build/outputs/apk/*/*.apk "$RUNNER_TEMP/apk/"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Maris Android
           if-no-files-found: error
-          path: mobile/android/app/build/outputs/apk/*/*.apk
+          path: ${{ runner.temp }}/apk/*.apk
 
   release:
     name: Publish the release
