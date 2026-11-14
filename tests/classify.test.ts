@@ -49,7 +49,21 @@ const readOnly = [
   'systeminfo',
   'tasklist',
   'python --version',
-  '$env:PATH'
+  '$env:PATH',
+  'gci | % Name',
+  'Get-ChildItem | ForEach-Object -MemberName FullName',
+  'Get-ChildItem | %{ $_.Name }',
+  'foreach ($f in Get-ChildItem) { $f.Name }',
+  'Get-Process | Format-Table -AutoSize',
+  'Get-Process | Select-Object -First 3 Name | ConvertTo-Json',
+  'Test-NetConnection example.com -Port 443',
+  'Split-Path C:\\a\\b -Leaf',
+  'sc.exe query Spooler',
+  'git branch -a',
+  'git branch --merged main',
+  'git remote -v',
+  'git reflog -n 5',
+  'git log --pretty=format:"%h %s" -n 5'
 ]
 
 const needsApproval = [
@@ -83,7 +97,23 @@ const needsApproval = [
   'nvidia-smi -pl 200',
   'Set-ExecutionPolicy Unrestricted',
   'Get-Process -Name chrome | ForEach-Object { $_.Kill() }',
-  'python script.py'
+  'python script.py',
+  // Changes that once passed as read-only.
+  'Get-ChildItem C:\\x -Recurse -File | % Delete',
+  'Get-ChildItem C:\\x | ForEach-Object -MemberName Delete',
+  'gci C:\\x | foreach Delete',
+  'Get-Process notepad | % Kill',
+  'Get-Service Spooler | % Stop',
+  'foreach ($x in rd C:\\x) { $x }',
+  'Format-Volume -DriveLetter Z -Force',
+  '(Get-Item C:\\x.txt).IsReadOnly = $true',
+  'Get-ChildItem | Where-Object { $x = 1 }',
+  "'x' | sc query",
+  'Remove\u2013Item C:\\x',
+  'git diff --output=C:\\x.txt',
+  'git reflog expire --expire=now --all',
+  'git remote -v add evil https://example.com/x.git',
+  'git branch --unset-upstream'
 ]
 
 test('read-only commands are recognised', () => {

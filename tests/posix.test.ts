@@ -177,7 +177,18 @@ test('POSIX read-only commands run without asking', () => {
     'python3 --version',
     'brew list',
     'apt list --installed',
-    'systemctl status ollama'
+    'systemctl status ollama',
+    'rg TODO src',
+    'tree -L 2',
+    'sort -n sizes.txt',
+    'git --no-pager log -n 3',
+    'git branch -vv',
+    'git branch --merged main',
+    'git remote -v',
+    'git stash list',
+    'ip -br addr',
+    'nvidia-smi --query-gpu=name,memory.used --format=csv',
+    'date -Iseconds'
   ]) {
     assert.equal(classifyPosixCommand(c).readOnly, true, c)
   }
@@ -204,7 +215,28 @@ test('POSIX commands that change things, chain, redirect or escalate need approv
     'find . -delete',
     'find . -exec rm {} ;',
     'systemctl restart ollama',
-    'ls\nrm x'
+    'ls\nrm x',
+    // Changes that once passed as read-only.
+    'rg --pre rm foo .',
+    'rg --hostname-bin=evil foo',
+    'tree -o /tmp/x.txt',
+    'tree -R -L 2',
+    'sort --compress-program=evil -S 1 big.txt',
+    'sort -no out.txt in.txt',
+    'file -C -m magic',
+    'git diff --output=/tmp/x.txt',
+    'git reflog expire --expire=now --all',
+    'git stash push -m list',
+    'git branch -f main HEAD~3',
+    'git branch newbranch',
+    'git remote -v remove origin',
+    'git --git-dir=/tmp/evil/.git log',
+    'git -C /tmp/evil status',
+    'git grep -Ocalc foo',
+    'ip netns exec x rm -rf /tmp/x',
+    'ip -batch cmds.txt',
+    'nvidia-smi -lgc 1500',
+    'date 0101120026'
   ]) {
     assert.equal(classifyPosixCommand(c).readOnly, false, c)
   }

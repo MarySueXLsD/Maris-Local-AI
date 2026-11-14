@@ -4,6 +4,26 @@ import type { Classification } from './classify'
 
 type Check = ((args: string[]) => string | undefined) | null
 
+/** Options of `git branch` that only list branches. */
+const BRANCH_LIST_FLAG =
+  /^(-a|--all|-r|--remotes|-v|-vv|--verbose|-l|--list|--show-current|-i|--ignore-case|--omit-empty|--no-abbrev|--abbrev=\d+|--no-color|--color(=\w+)?|--no-column|--column(=[\w,]+)?|--(sort|format|contains|no-contains|merged|no-merged|points-at)=.*)$/
+/** Options of `git branch` whose value is the next word (a commit, a sort key, a format). */
+const BRANCH_VALUE = /^--(sort|format|contains|no-contains|merged|no-merged|points-at)$/
+
+/** `git branch` that only lists: listing options, and name patterns after --list. */
+function branchListsOnly(args: string[]): boolean {
+  const list = args.includes('-l') || args.includes('--list')
+  for (let i = 0; i < args.length; i++) {
+    const x = args[i]
+    if (BRANCH_VALUE.test(x)) i++
+    else if (!BRANCH_LIST_FLAG.test(x) && !(list && !x.startsWith('-'))) return false
+  }
+  return true
+}
+
+/** git options that may come before the command: the others point git at another repository or setting. */
+const GIT_GLOBAL_OK = new Set(['--no-pager', '-P', '--no-optional-locks', '--version', '-v', '--help', '-h'])
+
 /** Programs that only read, each with an optional check of its arguments (returns a reason when it would change things). */
 const POSIX_READ: Record<string, Check> = {
   ls: null,
@@ -15,9 +35,10 @@ const POSIX_READ: Record<string, Check> = {
   grep: null,
   egrep: null,
   fgrep: null,
-  rg: null,
+  // --pre runs a program on every file it searches; --hostname-bin runs one to learn the computer's name.
+  rg: (a) => (a.some((x) => /^--(pre|hostname-bin)(=|$)/.test(x)) ? 'rg starts another program with that option' : undefined),
   stat: null,
-  file: null,
+  file: (a) => (a.some((x) => /^-[^-]*C/.test(x) || x === '--compile') ? 'file -C writes a compiled magic file' : undefined),
   du: null,
   df: null,
   pwd: null,
@@ -25,8 +46,9 @@ const POSIX_READ: Record<string, Check> = {
   id: null,
   groups: null,
   uname: null,
-  hostname: (a) => (a.some((x) => !x.startsWith('-')) ? 'hostname with a name renames the computer' : undefined),
-  date: (a) => (a.some((x) => x === '-s' || x === '--set') ? 'sets the clock' : undefined),
+  hostname: (a) => (a.some((x) => !x.startsWith('-') || /^(-F|--file|-b|--boot)/.test(x)) ? 'hostname with a name renames the computer' : undefined),
+  // "date 0101120026" sets the clock as well as "date -s".
+  date: (a) => (a.some((x) => x === '-s' || x.startsWith('--set') || /^\d{4,}(\.\d{2})?$/.test(x)) ? 'sets the clock' : undefined),
   uptime: null,
   ps: null,
   pgrep: null,
@@ -41,8 +63,10 @@ const POSIX_READ: Record<string, Check> = {
   type: null,
   echo: null,
   printf: null,
-  tree: null,
-  sort: (a) => (a.some((x) => x === '-o' || x.startsWith('--output')) ? 'writes a file' : undefined),
+  // -o writes the listing to a file, -R writes one into every folder.
+  tree: (a) => (a.some((x) => /^-[^-]*[oR]/.test(x) || x.startsWith('--output')) ? 'tree writes files with that option' : undefined),
+  // -o (also inside -no) writes a file; --compress-program runs a program.
+  sort: (a) => (a.some((x) => /^-[^-]*o/.test(x) || /^--(output|compress-program)/.test(x)) ? 'sort writes a file or starts a program with that option' : undefined),
   uniq: (a) => (a.filter((x) => !x.startsWith('-')).length > 1 ? 'writes a file' : undefined),
   cut: null,
   tr: null,
@@ -89,21 +113,37 @@ const POSIX_READ: Record<string, Check> = {
     return !verb || ['status', 'show', 'list-units', 'list-unit-files', 'list-timers', 'is-active', 'is-enabled', 'is-failed', 'cat'].includes(verb) ? undefined : 'changes system services'
   },
   journalctl: (a) => (a.some((x) => /^--(vacuum|rotate|flush|sync|relinquish-var|setup-keys)/.test(x)) ? 'changes the system log' : undefined),
-  ip: (a) => (a.some((x) => ['add', 'del', 'delete', 'set', 'flush', 'change', 'replace'].includes(x)) ? 'changes network settings' : undefined),
+  // "ip netns exec" runs a command; -batch runs ip commands from a file.
+  ip: (a) =>
+    a.some((x) => ['add', 'del', 'delete', 'deleteall', 'set', 'flush', 'change', 'replace', 'append', 'prepend', 'restore', 'update', 'exec', 'attach'].includes(x) || /^--?(b|ba|bat|batc|batch|force)$/.test(x))
+      ? 'changes network settings or runs a command'
+      : undefined,
   ifconfig: (a) => (a.length > 1 ? 'changes network settings' : undefined),
-  'nvidia-smi': (a) => (a.every((x) => !x.startsWith('-') || /^(--query|--format|-q|-L|--list-gpus|-i|--id|-d|--display|-l|--loop|-lms)/.test(x)) ? undefined : 'changes GPU settings'),
+  // Whole options only: -lgc and -lmc (lock clocks) start like -l.
+  'nvidia-smi': (a) =>
+    a.every((x) => !x.startsWith('-') || /^(-q|--query|-L|--list-gpus|-x|--xml-format|-i|-d|-l|-lms|--(query-[\w-]+|format|id|display|loop|loop-ms)=.*)$/.test(x)) ? undefined : 'changes GPU settings',
   'rocm-smi': (a) => (a.every((x) => !x.startsWith('-') || /^(--show|-a|--alldevices|--json|-d|--device)/.test(x)) ? undefined : 'changes GPU settings'),
   command: (a) => (a[0] === '-v' || a[0] === '-V' ? undefined : 'runs another command'),
   env: (a) => (a.length ? 'runs another command' : undefined),
   git: (a) => {
-    const sub = a.find((x) => !x.startsWith('-'))
-    if (!sub || a[0] === '--version') return undefined
-    if (['status', 'log', 'diff', 'show', 'rev-parse', 'ls-files', 'ls-tree', 'blame', 'describe', 'shortlog', 'reflog', 'cat-file', 'grep', 'help', 'version'].includes(sub)) return undefined
-    if (sub === 'branch' && !a.some((x) => /^(-d|-D|-m|-M|-c|-C|--delete|--move|--copy|--set-upstream-to|-u)$/.test(x))) return undefined
-    if (sub === 'remote' && (a.length === 1 || a.includes('-v') || a.includes('show') || a.includes('get-url'))) return undefined
-    if (sub === 'tag' && (a.length === 1 || a.includes('-l') || a.includes('--list'))) return undefined
-    if (sub === 'stash' && a.includes('list')) return undefined
-    if (sub === 'config' && a.some((x) => /^(--get|--list|-l)/.test(x))) return undefined
+    const at = a.findIndex((x) => !x.startsWith('-'))
+    // Options before the command (-C dir, --git-dir=…, -c name=value) point git at another repository or setting.
+    if ((at < 0 ? a : a.slice(0, at)).some((x) => !GIT_GLOBAL_OK.has(x))) return 'git options before the command can point it at another repository or setting'
+    if (at < 0) return undefined
+    const sub = a[at]
+    const rest = a.slice(at + 1)
+    // Options that write a file (git diff --output=x) or start another program (git grep -O<program>).
+    if (rest.some((x) => /^--(output|ext-diff|open-files-in-pager)(=|$)/.test(x) || (sub === 'grep' && /^-[^-]*O/.test(x)))) return 'git writes a file or starts a program with that option'
+    if (['status', 'log', 'diff', 'show', 'rev-parse', 'ls-files', 'ls-tree', 'blame', 'describe', 'shortlog', 'cat-file', 'grep', 'help', 'version'].includes(sub)) return undefined
+    if (sub === 'reflog') return ['expire', 'delete', 'drop'].includes(rest[0] ?? '') ? `git reflog ${rest[0]} deletes history` : undefined
+    if (sub === 'branch') return branchListsOnly(rest) ? undefined : 'git branch with these options creates, moves or changes a branch'
+    if (sub === 'remote') {
+      const r = rest.filter((x) => x !== '-v' && x !== '--verbose')
+      return !r.length || r[0] === 'show' || r[0] === 'get-url' ? undefined : `git remote ${r[0]} changes the repository's remotes`
+    }
+    if (sub === 'tag' && (!rest.length || rest[0] === '-l' || rest[0] === '--list')) return undefined
+    if (sub === 'stash' && (rest[0] === 'list' || rest[0] === 'show')) return undefined
+    if (sub === 'config' && (rest[0] === 'get' || rest[0] === 'list' || rest.some((x) => /^(--get|--list$|-l$)/.test(x)))) return undefined
     return `git ${sub} can change the repository`
   }
 }

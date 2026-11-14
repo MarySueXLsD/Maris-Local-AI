@@ -10,6 +10,7 @@ import { needsAdmin } from './keys'
 import { classifyCommand, commandPrefix } from './classify'
 import { installInfo } from './installInfo'
 import { classifyPosixCommand } from './classifyPosix'
+import { readOnlyGitEnv, repoProgramRisk, usesGit } from './gitSafety'
 import { resolvePath } from './paths'
 import { num, schema, str, ToolError, type ToolDef } from './types'
 
@@ -35,11 +36,16 @@ export function psScriptFile(script: string): { args: string[]; file: string } {
   return { file, args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file] }
 }
 
+/** How a script runs: its folder, time limit, a way to stop it, and environment variables added to Maris's own. */
+export interface RunOptions {
+  cwd?: string
+  timeoutMs?: number
+  signal?: AbortSignal
+  env?: Record<string, string>
+}
+
 /** Run a PowerShell script safely (script file, no profile, hidden window, UTF-8 output). */
-export function runPowerShell(
-  script: string,
-  opts: { cwd?: string; timeoutMs?: number; signal?: AbortSignal } = {}
-): Promise<PsResult> {
+export function runPowerShell(script: string, opts: RunOptions = {}): Promise<PsResult> {
   const wrapped = `$ProgressPreference='SilentlyContinue'
 [Console]::OutputEncoding=[System.Text.Encoding]::UTF8
 $OutputEncoding=[System.Text.Encoding]::UTF8
@@ -50,7 +56,7 @@ if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }`
   const { args, file } = psScriptFile(wrapped)
   const started = Date.now()
   return new Promise((resolve, reject) => {
-    const child = spawn('powershell.exe', args, { cwd: opts.cwd ?? os.homedir(), windowsHide: true })
+    const child = spawn('powershell.exe', args, { cwd: opts.cwd ?? os.homedir(), windowsHide: true, ...(opts.env ? { env: { ...process.env, ...opts.env } } : {}) })
     child.on('close', () => rmSync(file, { force: true }))
     let stdout = ''
     let stderr = ''
@@ -116,13 +122,13 @@ export const POSIX_PRELUDE = [
 ].join('\n')
 
 /** Run a script with the user's login shell (bash or zsh) on macOS and Linux. */
-export function runPosix(script: string, opts: { cwd?: string; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<PsResult> {
+export function runPosix(script: string, opts: RunOptions = {}): Promise<PsResult> {
   const started = Date.now()
   return new Promise((resolve, reject) => {
     const child = spawn(posixShell(), ['-lc', `${POSIX_PRELUDE}\n${script}`], {
       cwd: opts.cwd ?? os.homedir(),
       detached: true,
-      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1', TERM: 'dumb', PAGER: 'cat', GIT_PAGER: 'cat' }
+      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1', TERM: 'dumb', PAGER: 'cat', GIT_PAGER: 'cat', ...opts.env }
     })
     let stdout = ''
     let stderr = ''
@@ -154,7 +160,7 @@ export function runPosix(script: string, opts: { cwd?: string; timeoutMs?: numbe
 }
 
 /** Run a command line in this system's shell: PowerShell on Windows, bash/zsh elsewhere. */
-export function runShell(script: string, opts: { cwd?: string; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<PsResult> {
+export function runShell(script: string, opts: RunOptions = {}): Promise<PsResult> {
   return IS_WIN ? runPowerShell(script, opts) : runPosix(script, opts)
 }
 
@@ -200,15 +206,19 @@ export const shellTools: ToolDef[] = [
       const cwd = args.cwd ? resolvePath(String(args.cwd), ctx.cwd) : ctx.cwd
       if (!existsSync(cwd)) throw new ToolError(`Working folder not found: ${cwd}`)
       const c = IS_WIN ? classifyCommand(command) : classifyPosixCommand(command)
-      const auto = c.readOnly && ctx.settings.agent.autoRunReadOnlyCommands
+      // Git reads the repository's own settings, which can name programs it then starts (a folder unpacked
+      // from an archive brings its own): there even "git status" waits for the person.
+      const gitRisk = c.readOnly && usesGit(command) ? repoProgramRisk(cwd) : undefined
+      const readOnly = c.readOnly && !gitRisk
+      const auto = readOnly && ctx.settings.agent.autoRunReadOnlyCommands
       // Installs say how big they are (download, disk space, what is free) before the person decides.
-      const install = c.readOnly ? undefined : await installInfo(command)
+      const install = readOnly ? undefined : await installInfo(command)
       return {
         risk: auto ? 'read' : 'system',
         title: `Run: ${command.length > 90 ? command.slice(0, 90) + '…' : command}`,
-        detail: c.readOnly ? 'This command only reads information.' : `Needs approval: ${c.reason}.`,
+        detail: readOnly ? 'This command only reads information.' : `Needs approval: ${gitRisk ?? c.reason}.`,
         preview: { kind: 'command', command, cwd, shell: SHELL_LABEL },
-        allowPrefix: c.readOnly ? undefined : commandPrefix(command),
+        allowPrefix: readOnly ? undefined : commandPrefix(command),
         install
       }
     },
@@ -217,7 +227,9 @@ export const shellTools: ToolDef[] = [
       const cwd = args.cwd ? resolvePath(String(args.cwd), ctx.cwd) : ctx.cwd
       const timeoutMs = Math.min(1800, Math.max(5, num(args.timeout_sec, settings.get().agent.commandTimeoutSec))) * 1000
       ctx.progress('Running…')
-      const r = await runShell(command, { cwd, timeoutMs, signal: ctx.signal })
+      // A command that may run without a click gets git without optional index writes and file monitor.
+      const readOnly = (IS_WIN ? classifyCommand(command) : classifyPosixCommand(command)).readOnly
+      const r = await runShell(command, { cwd, timeoutMs, signal: ctx.signal, env: readOnly ? readOnlyGitEnv() : undefined })
       const out = [r.stdout, r.stderr && `[stderr]\n${r.stderr}`].filter(Boolean).join('\n')
       const status = r.timedOut ? `timed out after ${timeoutMs / 1000}s` : `exit code ${r.code ?? '?'}`
       return `$ ${command}\n(${status}, ${(r.ms / 1000).toFixed(1)}s)\n${truncate(out || '(no output)', 24000)}${adminHint(out, ctx.settings.agent.fullControl)}`

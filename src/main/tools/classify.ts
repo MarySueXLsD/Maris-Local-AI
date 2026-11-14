@@ -7,24 +7,44 @@ export interface Classification {
   reason: string
 }
 
-const ALLOWED_VERBS = new Set([
-  'get',
-  'select',
-  'where',
-  'sort',
-  'measure',
-  'format',
-  'group',
-  'test',
-  'resolve',
-  'join',
-  'split',
-  'compare',
-  'convertto',
-  'convertfrom',
-  'foreach'
+/** Verbs whose cmdlets only read, whichever cmdlet it is. */
+const ALLOWED_VERBS = new Set(['get', 'select', 'where', 'sort', 'measure', 'group', 'foreach'])
+/**
+ * Cmdlets that only read, of verbs that also have cmdlets which change things, so they are named one by
+ * one: Format-Volume formats a drive, Test-ComputerSecureChannel -Repair resets a trust, Split-WindowsImage
+ * writes files.
+ */
+const ALLOWED_CMDLETS = new Set([
+  'out-string',
+  'write-output',
+  'write-host',
+  'out-host',
+  'select-string',
+  'find-package',
+  'format-table',
+  'format-list',
+  'format-wide',
+  'format-custom',
+  'format-hex',
+  'test-path',
+  'test-connection',
+  'test-netconnection',
+  'test-json',
+  'resolve-path',
+  'resolve-dnsname',
+  'join-path',
+  'join-string',
+  'split-path',
+  'compare-object',
+  'convertto-json',
+  'convertto-csv',
+  'convertto-html',
+  'convertto-xml',
+  'convertfrom-json',
+  'convertfrom-csv',
+  'convertfrom-stringdata',
+  'convertfrom-markdown'
 ])
-const ALLOWED_CMDLETS = new Set(['out-string', 'write-output', 'write-host', 'out-host', 'select-string', 'find-package'])
 const DENIED_CMDLETS = new Set(['get-credential', 'convertto-securestring', 'convertfrom-securestring'])
 
 // Bare commands (aliases and console programs) allowed at the start of a pipeline segment.
@@ -79,7 +99,7 @@ const ALLOWED_PROGRAMS = new Set([
   'npm',
   'winget',
   'reg',
-  'sc',
+  // Only as sc.exe: in Windows PowerShell a plain "sc" is Set-Content, which writes a file.
   'sc.exe',
   'schtasks',
   'wsl'
@@ -110,6 +130,64 @@ const SAFE_METHODS = new Set([
 const SAFE_STATICS =
   /^\[(math|system\.math)\]::\w+$|^\[(datetime|system\.datetime)\]::(now|utcnow|today)$|^\[(environment|system\.environment)\]::(getfoldertpath|getfolderpath|osversion|machinename|username|processorcount|is64bitoperatingsystem|getenvironmentvariable|tickcount64|version)$|^\[(system\.io\.path|io\.path)\]::(getfilename|getextension|getdirectoryname|combine|gettemppath|getfilenamewithoutextension)$|^\[(system\.io\.driveinfo|io\.driveinfo)\]::getdrives$/i
 
+/** ForEach-Object, also as % and foreach. */
+const FOREACH = new Set(['%', 'foreach', 'foreach-object'])
+
+/**
+ * Members that ForEach-Object may use by name. "% Name" reads a property, but "% Delete" or "% Kill"
+ * calls a method on every object, so only properties known to be harmless pass (and SAFE_METHODS).
+ */
+const SAFE_MEMBERS = new Set(
+  (
+    'name fullname basename extension length directory directoryname parent root exists mode attributes lastwritetime ' +
+    'creationtime lastaccesstime linktype target pspath pschildname psparentpath psiscontainer id processname path ' +
+    'mainwindowtitle starttime cpu ws workingset64 pm vm handles company description productversion fileversion versioninfo ' +
+    'status displayname servicename starttype count value key keys values line linenumber filename matches source version ' +
+    'definition commandtype modulename hash algorithm size freespace used free caption manufacturer model driveletter ' +
+    'filesystemlabel filesystem sizeremaining message timecreated providername levelname ipaddress interfacealias ' +
+    'localaddress localport remoteaddress remoteport state owningprocess commandline executablepath processid ' +
+    'parentprocessid title text username'
+  ).split(' ')
+)
+
+/**
+ * The member a ForEach-Object step uses by name when it is not known to be harmless ("% Delete").
+ * Script blocks are left out: the commands in them are checked like every other command.
+ */
+function foreachMember(rest: string): string | undefined {
+  let text = rest
+  for (let prev = ''; prev !== text; ) {
+    prev = text
+    text = text.replace(/\{[^{}]*\}/g, ' ')
+  }
+  // A script block that a pipe cut in two.
+  text = text.replace(/\{[^}]*$/, ' ')
+  for (const raw of text.split(/\s+/)) {
+    const word = raw.replace(/[)}\]]+$/, '')
+    // Parameters (-MemberName, -Begin…) and values that are variables, strings, numbers or groups.
+    if (!word || /^[-$'"(@\d[]/.test(word)) continue
+    if (!SAFE_MEMBERS.has(word.toLowerCase()) && !SAFE_METHODS.has(word.toLowerCase())) return word
+  }
+  return undefined
+}
+
+/** Options of `git branch` that only list branches. */
+const BRANCH_LIST_FLAG =
+  /^(-a|--all|-r|--remotes|-v|-vv|--verbose|-l|--list|--show-current|-i|--ignore-case|--omit-empty|--no-abbrev|--abbrev=\d+|--no-color|--color(=\w+)?|--no-column|--column(=[\w,]+)?|--(sort|format|contains|no-contains|merged|no-merged|points-at)=.*)$/
+/** Options of `git branch` whose value is the next word (a commit, a sort key, a format). */
+const BRANCH_VALUE = /^--(sort|format|contains|no-contains|merged|no-merged|points-at)$/
+
+/** `git branch` that only lists: listing options, and name patterns after --list. (Arguments are in lower case.) */
+function branchListsOnly(args: string[]): boolean {
+  const list = args.includes('-l') || args.includes('--list')
+  for (let i = 0; i < args.length; i++) {
+    const x = args[i]
+    if (BRANCH_VALUE.test(x)) i++
+    else if (!BRANCH_LIST_FLAG.test(x) && !(list && !x.startsWith('-'))) return false
+  }
+  return true
+}
+
 function stripStrings(cmd: string): string {
   // Remove single-quoted and double-quoted strings (PowerShell doubles quotes to escape them).
   return cmd.replace(/'(?:[^']|'')*'/g, "''").replace(/"(?:[^"`]|`.|"")*"/g, '""')
@@ -138,12 +216,17 @@ function checkProgramArgs(program: string, args: string[]): string | undefined {
     case 'git': {
       const sub = a[0]
       if (!sub) return
-      const ok = ['status', 'log', 'diff', 'show', 'rev-parse', 'ls-files', 'blame', 'describe', 'shortlog', 'reflog', '--version']
+      // Options that write a file (git diff --output=x) or start another program, whatever the command.
+      if (a.some((x) => /^--(output|ext-diff|open-files-in-pager)(=|$)/.test(x))) return 'git can write a file or start a program with that option'
+      const ok = ['status', 'log', 'diff', 'show', 'rev-parse', 'ls-files', 'blame', 'describe', 'shortlog', '--version']
       if (ok.includes(sub)) return
-      if (sub === 'branch' && !a.some((x) => /^-(d|D|m|M|c|C|f)$|^--(delete|move|copy|force|set-upstream)/.test(x)) && a.length <= 3)
-        return a.slice(1).every((x) => x.startsWith('-')) ? undefined : 'git branch with a name creates a branch'
-      if (sub === 'remote' && (a.length === 1 || a[1] === '-v' || a[1] === 'show')) return
-      if (sub === 'config' && a.some((x) => ['--get', '--list', '-l', '--get-all'].includes(x))) return
+      if (sub === 'reflog') return ['expire', 'delete', 'drop'].includes(a[1] ?? '') ? `git reflog ${a[1]} deletes history` : undefined
+      if (sub === 'branch') return branchListsOnly(a.slice(1)) ? undefined : 'git branch with these options creates, moves or changes a branch'
+      if (sub === 'remote') {
+        const rest = a.slice(1).filter((x) => x !== '-v' && x !== '--verbose')
+        return !rest.length || rest[0] === 'show' || rest[0] === 'get-url' ? undefined : `git remote ${rest[0]} changes the repository's remotes`
+      }
+      if (sub === 'config' && (a[1] === 'get' || a[1] === 'list' || a.some((x) => ['--get', '--list', '-l', '--get-all'].includes(x)))) return
       if (sub === 'tag' && (a.length === 1 || a[1] === '-l' || a[1] === '--list')) return
       return `git ${sub} may change the repository`
     }
@@ -229,7 +312,8 @@ export function classifyCommand(command: string): Classification {
   if (/[\r\n]/.test(cmd)) return { readOnly: false, reason: 'multi-line script' }
   if (cmd.includes('`')) return { readOnly: false, reason: 'escape characters' }
   if (/\$\(/.test(cmd) || /@\(/.test(cmd)) return { readOnly: false, reason: 'sub-expression' }
-  const bare = stripStrings(cmd)
+  // PowerShell reads en and em dashes as "-" (Remove–Item, –Force), so the checks below do too.
+  const bare = stripStrings(cmd).replace(/[\u2013\u2014\u2015]/g, '-')
   if (/[<>]/.test(bare)) return { readOnly: false, reason: 'redirection writes to a file' }
   if (/;|&&|\|\||&/.test(bare)) return { readOnly: false, reason: 'chains several commands' }
   if (/(^|[\s|({])\.\s*[\\/{.]/.test(bare) || /(^|[\s|({])\.\\/.test(bare)) return { readOnly: false, reason: 'runs a script' }
@@ -243,6 +327,9 @@ export function classifyCommand(command: string): Classification {
   for (const m of bare.matchAll(/\.([A-Za-z_]\w*)\s*\(/g)) {
     if (!SAFE_METHODS.has(m[1].toLowerCase())) return { readOnly: false, reason: `method call .${m[1]}()` }
   }
+  // Setting a property or a variable: (Get-Item x).IsReadOnly = $true changes the file. (Program options
+  // such as --format=csv have a plain word before the "=", so they do not count.)
+  if (/(?:\$[\w:]+|[)\]}]|\.\w+)\s*(?:\?\?|[-+*/%])?=(?!=)/.test(bare)) return { readOnly: false, reason: 'sets a property or variable' }
   // Every cmdlet anywhere in the command (including inside script blocks) must be read-only.
   for (const m of bare.matchAll(/(?<![\w.\-\\/:])([A-Za-z]+)-([A-Za-z][\w]*)(?![\w-]*[:\\/])/g)) {
     const name = `${m[1]}-${m[2]}`.toLowerCase()
@@ -256,14 +343,23 @@ export function classifyCommand(command: string): Classification {
   const starts: string[] = []
   for (const seg of splitSegments(bare)) starts.push(seg)
   for (const m of bare.matchAll(/\{\s*([^{}|]+)/g)) starts.push(m[1])
-  // Parenthesised sub-pipelines run commands too, e.g. Get-Item (ri x)
-  for (const m of bare.matchAll(/\(\s*([^()|]+)/g)) starts.push(m[1])
+  // Parenthesised sub-pipelines run commands too, e.g. Get-Item (ri x), and so does the pipeline of a
+  // foreach statement: foreach ($x in rd C:\x) { … } runs rd.
+  for (const m of bare.matchAll(/\(\s*([^()|]+)/g)) starts.push(m[1].replace(/^\$[\w:{}]+\s+in\s+/i, ''))
   for (const seg of starts) {
     const tokens = tokenizeArgs(seg)
     const rawFirst = (tokens[0] ?? '').replace(/^\(+/, '')
     if (!rawFirst || /^[$['"\d\-)]/.test(rawFirst)) continue
     const word = (rawFirst.match(/^[A-Za-z0-9_.\-?%]+/)?.[0] ?? rawFirst).toLowerCase()
     const program = word.replace(/\.exe$/, '')
+    if (FOREACH.has(word)) {
+      const rest = seg.trim().replace(/^\(+/, '').slice(word.length)
+      // The foreach statement, foreach ($x in …) { … }: its pipeline and block are checked as starts of their own.
+      if (/^\s*\(/.test(rest)) continue
+      const member = foreachMember(rest)
+      if (member) return { readOnly: false, reason: `ForEach-Object ${member} may call a method that changes every object` }
+      continue
+    }
     if (ALLOWED_PROGRAMS.has(program) || ALLOWED_PROGRAMS.has(word)) {
       const why = checkProgramArgs(program, tokens.slice(1))
       if (why) return { readOnly: false, reason: why }

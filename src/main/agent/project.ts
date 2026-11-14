@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import type { Project } from '@shared/types'
 import { repo } from '../db'
+import { readOnlyGitEnv, repoProgramRisk } from '../tools/gitSafety'
 import { runShell } from '../tools/shell'
 
 export interface ProjectContext {
@@ -127,14 +128,21 @@ export async function projectContext(dir: string): Promise<ProjectContext> {
     /* unreadable */
   }
   let git: string | undefined
-  if (existsSync(path.join(dir, '.git'))) {
+  // The repository's own settings can name programs that even "git status" starts (a file monitor, a clean
+  // filter): in such a folder, unpacked from an archive say, Maris does not run git by itself.
+  const isRepo = existsSync(path.join(dir, '.git'))
+  const risk = isRepo ? repoProgramRisk(dir) : undefined
+  if (risk) git = `(Maris did not read the git status by itself: ${risk}. Git commands here need the user's approval.)`
+  else if (isRepo) {
+    // Without optional locks git does not write the index (which would start the repository's hook), and the file monitor stays off.
     const status = (extra: string): Promise<{ stdout: string; stderr: string } | undefined> =>
-      runShell(`git ${extra}-c core.quotepath=off status --short --branch`, { cwd: dir, timeoutMs: 8000 }).catch(() => undefined)
+      runShell(`git ${extra}-c core.quotepath=off status --short --branch`, { cwd: dir, timeoutMs: 8000, env: readOnlyGitEnv() }).catch(() => undefined)
     let r = await status('')
     let note = ''
     // Drives that do not record who owns a file (exFAT and FAT sticks and disks, some network shares)
-    // make git refuse the folder as "dubious ownership". Reading its status is safe, and the model is
-    // told how to write its own git commands there, instead of being told this is not a repository.
+    // make git refuse the folder as "dubious ownership". Its settings were checked above and name no
+    // program, so reading its status is safe, and the model is told how to write its own git commands
+    // there (they need approval), instead of being told this is not a repository.
     if (r && !r.stdout && /dubious ownership|safe\.directory/i.test(`${r.stderr}`)) {
       r = await status("-c 'safe.directory=*' ")
       note = "\n(Git does not trust this folder, because its drive does not record who owns files. Write git commands here as: git -c 'safe.directory=*' <command>)"
