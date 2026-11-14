@@ -1,0 +1,26 @@
+# Pull requests for outdated dependencies, grouped so they arrive as a few, not dozens. The Checks workflow
+# runs the tests on each one; nothing is merged by itself.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: npm
+    directory: /mobile
+    schedule:
+      interval: monthly
+    groups:
+      capacitor:
+        patterns: ['@capacitor/*']
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ['*']

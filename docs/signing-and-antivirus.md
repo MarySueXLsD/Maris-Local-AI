@@ -24,6 +24,12 @@ false alarms. Signing is the one that makes the biggest difference.
 - **Everything is undone on uninstall**: PATH entry, folder menu, startup entry, shortcuts.
 - **Checksums.** `node scripts/checksums.cjs release/windows` writes `SHA256SUMS-windows.txt` with
   the SHA-256 fingerprint of each file; a GitHub release lists every file (and the unpacked `Maris.exe`) in `SHA256SUMS.txt`.
+- **Signed updates (once a release key is set up).** `node scripts/release-key.mjs` makes an Ed25519
+  key, keeps the private half in a file of yours and builds the public half into Maris
+  (`src/shared/releaseKeys.ts`); `gh secret set MARIS_RELEASE_KEY` gives it to the Build workflow, which
+  then signs `SHA256SUMS.txt` (`SHA256SUMS.txt.sig`). Copies of Maris that know the key install an update
+  only when that signature is right, so a release published by someone who got into the GitHub account
+  is refused. This is separate from code signing below: it protects updates, not first downloads.
 
 ## 2. Sign the program (the real fix)
 
