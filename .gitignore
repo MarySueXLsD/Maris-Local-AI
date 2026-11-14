@@ -13,3 +13,6 @@ test-results/
 scripts/trailer/footage/
 scripts/trailer/film/footage.js
 scripts/trailer/film/timeline.js
+
+# The Maris relay: what wrangler keeps while deploying it
+relay/.wrangler/

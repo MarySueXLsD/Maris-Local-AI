@@ -1,0 +1,16 @@
+# The Maris relay (see README.md). Deploy with: npx wrangler@4 deploy
+name = "maris-relay"
+main = "src/index.mjs"
+compatibility_date = "2026-11-01"
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+# SQLite-backed Durable Objects are what the Workers Free plan offers. The relay stores nothing.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
+
+[observability]
+enabled = false
