@@ -17,8 +17,11 @@ export interface UpdateInfo {
   publishedAt: string
   /** The installer for this system, when the release has one. */
   asset?: UpdateAsset
-  /** SHA256SUMS files of the release: the download is checked against them before it is used. */
-  checksums?: UpdateAsset[]
+  /**
+   * SHA256SUMS files of the release: the download is checked against them before it is used. `sig` is the
+   * address of the file's signature (SHA256SUMS.txt.sig), when the release has one.
+   */
+  checksums?: (UpdateAsset & { sig?: string })[]
 }
 
 export interface UpdateState {

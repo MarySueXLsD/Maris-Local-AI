@@ -6,6 +6,8 @@ export interface ApprovalAnswer {
   approved: boolean
   /** The person also chose "Always approve …" with this scope. */
   rule?: ApprovalRule
+  /** With a denial: what the person wants instead ("use the other folder"). */
+  note?: string
 }
 
 type Pending = { req: ApprovalRequest; resolve: (a: ApprovalAnswer) => void }
@@ -39,12 +41,16 @@ class Approvals {
     })
   }
 
-  /** `rule` (or `true`, the old "always allow this command" answer) only counts with an approval. */
-  respond(id: string, approved: boolean, rule?: ApprovalRule | boolean): boolean {
+  /**
+   * `rule` (or `true`, the old "always allow this command" answer) only counts with an approval; `note`,
+   * what the person wants instead, only with a denial.
+   */
+  respond(id: string, approved: boolean, rule?: ApprovalRule | boolean, note?: unknown): boolean {
     const p = this.pending.get(id)
     if (!p) return false
-    const r: ApprovalRule | undefined = rule === true ? 'prefix' : rule === false ? undefined : rule
-    p.resolve({ approved, rule: approved ? r : undefined })
+    const r: ApprovalRule | undefined = rule === true ? 'prefix' : rule === false || rule === null ? undefined : rule
+    const said = !approved && typeof note === 'string' && note.trim() ? note.trim().slice(0, 1000) : undefined
+    p.resolve({ approved, rule: approved ? r : undefined, note: said })
     return true
   }
 

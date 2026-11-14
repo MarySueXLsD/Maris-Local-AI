@@ -80,12 +80,16 @@ interface State {
   setupOpen: boolean
   /** Article shown on the Help page. */
   helpArticle?: string
-  /** The Settings section to show (set when a page link such as page:settings/phone is opened). */
-  settingsSection?: { id: string; tick: number }
+  /** The Settings section to show (set when a page link such as page:settings/phone is opened), and words to search for. */
+  settingsSection?: { id: string; tick: number; query?: string }
+  /** The Ctrl+K box for going anywhere. */
+  paletteOpen: boolean
   /** Facts about this copy of Maris and the system it runs on. */
   appInfo?: { version: string; material?: boolean }
 
   openHelp(article?: string): void
+  /** Settings, on a section, with one setting searched for (from the Ctrl+K box). */
+  openSetting(section: string, query: string): void
   /** Open one of Maris's own pages from a link in an answer ("page:models/api"). False: no such page. */
   openPage(link: string): boolean
   openSetup(): void
@@ -260,11 +264,17 @@ export const useApp = create<State>((set, get) => {
     panelOpen: typeof window === 'undefined' || window.innerWidth >= 1100,
     draftAutoEdits: false,
     setupOpen: false,
+    paletteOpen: false,
     unread: loadUnread(),
     modelsTab: 'text',
 
     openHelp(article) {
-      set((s) => ({ view: 'help', helpArticle: article ?? s.helpArticle ?? 'welcome' }))
+      set((s) => ({ view: 'help', helpArticle: article ?? s.helpArticle ?? 'welcome', ...(narrow() ? { sidebarOpen: false } : {}) }))
+    },
+
+    openSetting(section, query) {
+      set((s) => ({ settingsSection: { id: section, query, tick: (s.settingsSection?.tick ?? 0) + 1 } }))
+      get().setView('settings')
     },
 
     openPage(link) {

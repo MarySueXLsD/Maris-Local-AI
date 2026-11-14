@@ -82,7 +82,9 @@ export async function backup(p: string): Promise<string | undefined> {
   const dir = backupDir()
   await fs.mkdir(dir, { recursive: true })
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-')
-  const dest = path.join(dir, `${stamp}-${path.basename(p)}`)
+  // Two files with the same name in the same second each keep their own backup.
+  let dest = path.join(dir, `${stamp}-${path.basename(p)}`)
+  for (let i = 2; existsSync(dest); i++) dest = path.join(dir, `${stamp}-${i}-${path.basename(p)}`)
   await fs.copyFile(p, dest)
   return dest
 }

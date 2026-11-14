@@ -1,17 +1,20 @@
 import { app, safeStorage } from 'electron'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import type { LinkDevice, LinkStatus } from '@shared/types'
+import { relayBase, roomUrl, type RelayInfo } from '@shared/relay'
+import type { LinkDevice, LinkStatus, RelayState } from '@shared/types'
 import { handlers, outbound } from '../bridge'
 import { comfy } from '../media/comfy'
 import { media } from '../media/jobs'
 import { settings } from '../settings'
 import { Emitter, log } from '../util'
+import { phoneAccess, phoneArgs } from './policy'
 import { b64u, deriveKey, isPrivateAddress, LINK_VERSION, MAX_SKEW_MS, newPairingCode, seal, sealBytes, serverKeyPair, unseal, type Box } from './protocol'
+import { RelayClient } from './relayClient'
 
 interface StoredDevice extends LinkDevice {
   /** The session key, encrypted with the OS keychain (safeStorage) when available. */
@@ -27,46 +30,27 @@ interface Envelope {
   n: string
 }
 
-/** Channels the phone app may not call: dialogs and folders on this computer, setup, and pairing itself. */
-const BLOCKED = new Set([
-  'settings:pickFolder',
-  'settings:export',
-  'settings:import',
-  'files:pick',
-  'files:pickImage',
-  'files:attach',
-  'shell:openPath',
-  'shell:showInFolder',
-  'shell:openExternal',
-  'shell:reveal',
-  // New project folders are made on the computer, with its folder picker.
-  'project:create',
-  'setup:apply',
-  'setup:skip',
-  'setup:cancel',
-  'setup:scan',
-  // Updates install on the computer itself; skills from a folder use a dialog there.
-  'updates:install',
-  'updates:download',
-  // Ending programs on the computer needs someone at the computer.
-  'system:endProgram',
-  'skills:pickFolder',
-  // Keys for model services are entered at the computer, and so is where chats may be sent.
-  'providers:add',
-  'providers:edit',
-  'providers:remove',
-  'providers:setPrice',
-  'providers:clearUsage',
-  // The terminal command belongs to this computer.
-  'cli:show',
-  'cli:status',
-  'cli:set'
-])
-/** Channels that change this computer and follow "Approve changes from the phone". */
-const NEEDS_APPROVAL_RIGHT = new Set(['chat:approve', 'project:installToolchain', 'project:revert'])
+/** A request from a phone, whichever way it came: over the home network, or through the relay. */
+interface Incoming {
+  method: string
+  path: string
+  query: URLSearchParams
+  body: unknown
+  /** Who to count failed attempts against: an IP address, or "relay:<device id>". */
+  peer: string
+  /** The device the relay delivered it from (requests through the relay only). */
+  relayDev?: string
+}
+
+type Outgoing = { status: number; json: unknown } | { status: number; bytes: Buffer } | { status: 200; events: Device }
+
+// What the phone may call is decided channel by channel in ./policy.ts (anything not listed there stays on
+// the computer). Requests through the Maris relay go through the same steps as those on the home network.
 
 const MAX_BODY = 40 * 2 ** 20
 const MAX_MEDIA = 300 * 2 ** 20
+/** The status bar's readings go to a phone on the relay every few seconds, not every one. */
+const RELAY_STATUS_MS = 10_000
 
 class LinkServer {
   readonly changed = new Emitter<LinkStatus>()
@@ -76,9 +60,22 @@ class LinkServer {
   private devices = new Map<string, Device>()
   private pairing?: { code: string; expiresAt: number; failures: number; pending: Map<string, { key: Buffer; name: string; expiresAt: number }> }
   private clients = new Set<{ device: Device; res: ServerResponse }>()
+  /** Phones listening for updates through the relay, by device id. */
+  private relayClients = new Map<string, { device: Device; statusAt: number }>()
   private nonces = new Map<string, number>()
   private blocked = new Map<string, { count: number; until: number }>()
   private offOutbound?: () => void
+  private relay = new RelayClient({
+    frame: (dev, text) => void this.onRelayFrame(dev, text),
+    phone: (dev, here) => {
+      if (!here && this.relayClients.delete(dev)) this.emit()
+    },
+    state: (s: RelayState) => {
+      if (s !== 'online') this.relayClients.clear()
+      this.emit()
+    }
+  })
+  private relayKey?: string
 
   private file(): string {
     return path.join(app.getPath('userData'), 'link-devices.json')
@@ -108,14 +105,53 @@ class LinkServer {
     writeFileSync(this.file(), JSON.stringify(list, null, 2), { mode: 0o600 })
   }
 
-  /** Follow the setting: start, stop or move to a new port. */
+  // ---------------------------------------------------------------- the relay's room
+
+  /**
+   * The key of this computer's room at the relay (made once, kept with the OS keychain). The room id phones
+   * use is a hash of it, so knowing the id is not enough to take this computer's place there.
+   */
+  private roomKey(): string {
+    if (this.relayKey) return this.relayKey
+    const file = path.join(app.getPath('userData'), 'link-relay.json')
+    try {
+      const stored = (JSON.parse(readFileSync(file, 'utf8')) as { key: string }).key
+      this.relayKey = stored.startsWith('enc:') ? safeStorage.decryptString(Buffer.from(stored.slice(4), 'base64')) : stored
+    } catch {
+      this.relayKey = b64u.enc(randomBytes(32))
+      const enc = safeStorage.isEncryptionAvailable()
+      writeFileSync(file, JSON.stringify({ key: enc ? `enc:${safeStorage.encryptString(this.relayKey).toString('base64')}` : this.relayKey }), { mode: 0o600 })
+    }
+    return this.relayKey
+  }
+
+  /** Where paired phones find this computer when they are away from home; undefined while that is off. */
+  private relayInfo(): RelayInfo | undefined {
+    const cfg = settings.get().link
+    const url = relayBase(cfg.relayUrl)
+    if (!cfg.enabled || !cfg.anywhere || !url) return undefined
+    return { url, room: createHash('sha256').update(`maris-relay-room:${this.roomKey()}`).digest('base64url') }
+  }
+
+  private applyRelay(): void {
+    const info = this.relayInfo()
+    if (!info || !this.server) return this.relay.stop()
+    this.relay.start(roomUrl(info.url, info.room, 'pc', this.roomKey()))
+  }
+
+  // ---------------------------------------------------------------- on and off
+
+  /** Follow the settings: start, stop, move to a new port, connect to the relay or leave it. */
   apply(): void {
     const cfg = settings.get().link
     if (!this.devices.size && existsSync(this.file())) this.load()
     if (!cfg.enabled) return this.stop()
-    if (this.server && this.port === cfg.port) return
-    this.stop()
-    this.start(cfg.port)
+    if (!this.server || this.port !== cfg.port) {
+      this.stop()
+      this.start(cfg.port)
+    }
+    this.applyRelay()
+    this.emit()
   }
 
   private start(port: number): void {
@@ -142,6 +178,8 @@ class LinkServer {
     if (this.devices.size) this.save()
     for (const c of this.clients) c.res.end()
     this.clients.clear()
+    this.relayClients.clear()
+    this.relay.stop()
     this.offOutbound?.()
     this.offOutbound = undefined
     this.server?.close()
@@ -154,9 +192,10 @@ class LinkServer {
 
   status(): LinkStatus {
     const cfg = settings.get().link
-    const online = new Set([...this.clients].map((c) => c.device.id))
+    const lan = new Set([...this.clients].map((c) => c.device.id))
     const addresses = lanAddresses()
     const pairing = this.pairing && this.pairing.expiresAt > Date.now() ? this.pairing : undefined
+    const info = this.relayInfo()
     return {
       enabled: cfg.enabled,
       running: Boolean(this.server?.listening),
@@ -164,16 +203,23 @@ class LinkServer {
       addresses,
       hostName: os.hostname(),
       devices: [...this.devices.values()]
-        .map(({ key: _k, ...d }) => ({ ...d, online: online.has(d.id) }))
+        .map(({ key: _k, ...d }) => {
+          const via = lan.has(d.id) ? ('lan' as const) : this.relayClients.has(d.id) ? ('relay' as const) : undefined
+          return { ...d, online: Boolean(via), via }
+        })
         .sort((a, b) => (b.lastSeen ?? b.createdAt) - (a.lastSeen ?? a.createdAt)),
       pairing: pairing
         ? {
             code: pairing.code,
             expiresAt: pairing.expiresAt,
-            url: `maris://pair?h=${encodeURIComponent(addresses.slice(0, 3).join(','))}&p=${cfg.port}&c=${encodeURIComponent(pairing.code)}&n=${encodeURIComponent(os.hostname())}`
+            url:
+              `maris://pair?h=${encodeURIComponent(addresses.slice(0, 3).join(','))}&p=${cfg.port}&c=${encodeURIComponent(pairing.code)}&n=${encodeURIComponent(os.hostname())}` +
+              // A phone that is not on this network pairs through the relay.
+              (info ? `&r=${encodeURIComponent(info.url)}&m=${info.room}` : '')
           }
         : undefined,
-      error: this.error
+      error: this.error,
+      relay: cfg.enabled && cfg.anywhere ? { state: info ? this.relay.state : 'off', url: info?.url ?? '', error: info ? this.relay.error : 'No relay address is set.' } : undefined
     }
   }
 
@@ -202,16 +248,34 @@ class LinkServer {
         this.clients.delete(c)
       }
     }
+    this.relayClients.delete(id)
     this.save()
     this.emit()
     return this.status()
   }
 
-  // ---------------------------------------------------------------- HTTP
+  // ---------------------------------------------------------------- requests, from either way in
 
+  private async route(r: Incoming): Promise<Outgoing> {
+    const block = this.blocked.get(r.peer)
+    if (block && block.until > Date.now()) return { status: 429, json: { error: 'Too many failed attempts. Try again in a few minutes.' } }
+    const { method, path: p } = r
+    if (method === 'GET' && p === '/api/hello') {
+      // The computer's name only on the home network: a phone that only knows the relay room learns it when paired.
+      return { status: 200, json: { app: 'maris', v: LINK_VERSION, ...(r.relayDev ? {} : { name: os.hostname() }), pairing: Boolean(this.pairing && this.pairing.expiresAt > Date.now()) } }
+    }
+    if (method === 'POST' && p === '/api/pair/start') return this.pairStart(r)
+    if (method === 'POST' && p === '/api/pair/finish') return this.pairFinish(r)
+    if (method === 'POST' && p === '/api/invoke') return this.invoke(r)
+    if (method === 'GET' && p === '/api/events') return this.eventsRequest(r)
+    if (method === 'POST' && p === '/api/media') return this.media(r)
+    if (method === 'POST' && p === '/api/upload') return this.upload(r)
+    return { status: 404, json: { error: 'Not found' } }
+  }
+
+  /** The home network: phones on the same network (or a private VPN such as Tailscale) only. */
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const ip = req.socket.remoteAddress ?? ''
-    // Phones on the same network (or a private VPN such as Tailscale) only.
     if (!isPrivateAddress(ip)) {
       req.destroy()
       return
@@ -221,30 +285,15 @@ class LinkServer {
       res.writeHead(204).end()
       return
     }
-    const block = this.blocked.get(ip)
-    if (block && block.until > Date.now()) {
-      json(res, 429, { error: 'Too many failed attempts. Try again in a few minutes.' })
-      return
-    }
     const url = new URL(req.url ?? '/', 'http://maris')
     try {
-      if (req.method === 'GET' && url.pathname === '/api/hello') {
-        json(res, 200, { app: 'maris', v: LINK_VERSION, name: os.hostname(), pairing: Boolean(this.pairing && this.pairing.expiresAt > Date.now()) })
-      } else if (req.method === 'POST' && url.pathname === '/api/pair/start') {
-        await this.pairStart(req, res, ip)
-      } else if (req.method === 'POST' && url.pathname === '/api/pair/finish') {
-        await this.pairFinish(req, res, ip)
-      } else if (req.method === 'POST' && url.pathname === '/api/invoke') {
-        await this.invoke(req, res, ip)
-      } else if (req.method === 'GET' && url.pathname === '/api/events') {
-        this.events(url, res, ip)
-      } else if (req.method === 'POST' && url.pathname === '/api/media') {
-        await this.media(req, res, ip)
-      } else if (req.method === 'POST' && url.pathname === '/api/upload') {
-        await this.upload(req, res, ip)
-      } else {
-        json(res, 404, { error: 'Not found' })
-      }
+      const body = req.method === 'POST' ? await readJson(req) : undefined
+      const out = await this.route({ method: req.method ?? 'GET', path: url.pathname, query: url.searchParams, body, peer: ip })
+      if ('events' in out) this.openStream(out.events, res)
+      else if ('bytes' in out) {
+        res.writeHead(out.status, { 'Content-Type': 'application/octet-stream', 'Content-Length': String(out.bytes.length) })
+        res.end(out.bytes)
+      } else json(res, out.status, out.json)
     } catch (e) {
       log.warn('link', e)
       if (!res.headersSent) json(res, 400, { error: 'Bad request' })
@@ -252,22 +301,54 @@ class LinkServer {
     }
   }
 
-  private fail(ip: string): void {
-    const b = this.blocked.get(ip) ?? { count: 0, until: 0 }
+  /** The relay: a request frame {id, m, p, q?, b?} from a phone; the answer goes back the same way. */
+  private async onRelayFrame(dev: string, text: string): Promise<void> {
+    let f: { id?: unknown; m?: unknown; p?: unknown; q?: unknown; b?: unknown }
+    try {
+      f = JSON.parse(text) as typeof f
+    } catch {
+      return
+    }
+    if (typeof f.id !== 'string' && typeof f.id !== 'number') return
+    let out: Outgoing
+    try {
+      out = await this.route({
+        method: typeof f.m === 'string' ? f.m : 'POST',
+        path: typeof f.p === 'string' ? f.p : '',
+        query: new URLSearchParams(typeof f.q === 'string' ? f.q : ''),
+        body: f.b,
+        peer: `relay:${dev}`,
+        relayDev: dev
+      })
+    } catch (e) {
+      log.warn('link', e)
+      out = { status: 400, json: { error: 'Bad request' } }
+    }
+    if ('events' in out) {
+      this.relayClients.set(dev, { device: out.events, statusAt: 0 })
+      this.relay.send(dev, JSON.stringify({ id: f.id, s: 200, j: { ok: true } }))
+      this.sendRelayInfo(out.events, (frame) => this.relay.send(dev, frame))
+      this.emit()
+    } else if ('bytes' in out) this.relay.send(dev, JSON.stringify({ id: f.id, s: out.status, x: out.bytes.toString('base64') }))
+    else this.relay.send(dev, JSON.stringify({ id: f.id, s: out.status, j: out.json }))
+  }
+
+  private fail(peer: string): void {
+    const b = this.blocked.get(peer) ?? { count: 0, until: 0 }
     b.count += 1
     if (b.count >= 20) {
       b.until = Date.now() + 10 * 60000
       b.count = 0
     }
-    this.blocked.set(ip, b)
+    this.blocked.set(peer, b)
   }
 
   /**
    * Open a sealed request from a paired device, checking freshness and that it was not seen before.
-   * On failure it answers the request itself: 401 for an unknown phone or a wrong key (the phone then
-   * forgets its pairing), 409 for a stale or repeated request (a clock problem; the pairing stays).
+   * 401 for an unknown phone or a wrong key (the phone then forgets its pairing), 409 for a stale or
+   * repeated request (a clock problem; the pairing stays).
    */
-  private openFrom<T extends Envelope>(res: ServerResponse, deviceId: string, box: Box, ip: string): { device: Device; body: T } | undefined {
+  private openFrom<T extends Envelope>(deviceId: string, box: Box, peer: string): { device: Device; body: T } | { status: number; json: unknown } {
     const device = this.devices.get(deviceId)
     let body: T | undefined
     if (device) {
@@ -278,14 +359,12 @@ class LinkServer {
       }
     }
     if (!device || !body) {
-      this.fail(ip)
-      json(res, 401, { error: 'Not paired' })
-      return undefined
+      this.fail(peer)
+      return { status: 401, json: { error: 'Not paired' } }
     }
     const now = Date.now()
     if (Math.abs(now - body.ts) > MAX_SKEW_MS || typeof body.n !== 'string' || this.nonces.has(body.n)) {
-      json(res, 409, { error: "Request refused: it was sent twice, or the phone's clock differs from the computer's by more than two minutes." })
-      return undefined
+      return { status: 409, json: { error: "Request refused: it was sent twice, or the phone's clock differs from the computer's by more than two minutes." } }
     }
     this.nonces.set(body.n, now + MAX_SKEW_MS * 2)
     if (this.nonces.size > 5000) for (const [n, exp] of this.nonces) if (exp < now) this.nonces.delete(n)
@@ -293,123 +372,93 @@ class LinkServer {
     return { device, body }
   }
 
-  private async pairStart(req: IncomingMessage, res: ServerResponse, ip: string): Promise<void> {
+  private sealedOf(r: Incoming): { d: string; box: Box } {
+    const b = (r.body ?? {}) as { d?: unknown; iv?: unknown; ct?: unknown }
+    return { d: String(b.d ?? ''), box: { iv: String(b.iv ?? ''), ct: String(b.ct ?? '') } }
+  }
+
+  private pairStart(r: Incoming): Outgoing {
     const p = this.pairing
-    if (!p || p.expiresAt < Date.now()) {
-      json(res, 409, { error: 'Pairing is not open. On the computer, open Settings → Phone and choose "Pair a phone".' })
-      return
-    }
-    const { d, name, pub } = (await readJson(req)) as { d?: string; name?: string; pub?: string }
-    if (!d || !/^[A-Za-z0-9_-]{16,64}$/.test(d) || !pub) {
-      json(res, 400, { error: 'Bad request' })
-      return
-    }
+    if (!p || p.expiresAt < Date.now()) return { status: 409, json: { error: 'Pairing is not open. On the computer, open Settings → Phone and choose "Pair a phone".' } }
+    const { d, name, pub } = (r.body ?? {}) as { d?: string; name?: string; pub?: string }
+    if (!d || !/^[A-Za-z0-9_-]{16,64}$/.test(d) || !pub) return { status: 400, json: { error: 'Bad request' } }
+    // Through the relay, a phone can only pair as the device it connected as.
+    if (r.relayDev && r.relayDev !== d) return { status: 400, json: { error: 'Bad request' } }
     const phonePub = b64u.dec(pub)
     const kp = serverKeyPair()
     let shared: Buffer
     try {
       shared = kp.secret(phonePub)
     } catch {
-      this.fail(ip)
-      json(res, 400, { error: 'Bad key' })
-      return
+      this.fail(r.peer)
+      return { status: 400, json: { error: 'Bad key' } }
     }
     p.pending.set(d, { key: deriveKey(shared, p.code, d, phonePub, kp.pub), name: String(name ?? 'Phone').slice(0, 60), expiresAt: Date.now() + 120000 })
-    json(res, 200, { pub: b64u.enc(kp.pub), name: os.hostname() })
+    return { status: 200, json: { pub: b64u.enc(kp.pub), name: os.hostname() } }
   }
 
-  private async pairFinish(req: IncomingMessage, res: ServerResponse, ip: string): Promise<void> {
+  private pairFinish(r: Incoming): Outgoing {
     const p = this.pairing
-    const { d, iv, ct } = (await readJson(req)) as { d?: string } & Box
+    const { d, box } = this.sealedOf(r)
     const pending = p && d ? p.pending.get(d) : undefined
-    if (!p || !pending || pending.expiresAt < Date.now() || p.expiresAt < Date.now()) {
-      json(res, 409, { error: 'Pairing expired. Start again on the computer.' })
-      return
-    }
+    if (!p || !pending || pending.expiresAt < Date.now() || p.expiresAt < Date.now()) return { status: 409, json: { error: 'Pairing expired. Start again on the computer.' } }
     let body: Envelope & { name?: string }
     try {
-      body = unseal(pending.key, { iv, ct })
+      body = unseal(pending.key, box)
     } catch {
       // Wrong code: a few tries, then the code is cancelled so it cannot be guessed.
-      p.pending.delete(d!)
+      p.pending.delete(d)
       p.failures += 1
-      this.fail(ip)
+      this.fail(r.peer)
       if (p.failures >= 5) this.pairing = undefined
       this.emit()
-      json(res, 403, { error: p.failures >= 5 ? 'Too many wrong codes. Start pairing again on the computer.' : 'The code does not match. Check it and try again.' })
-      return
+      return { status: 403, json: { error: p.failures >= 5 ? 'Too many wrong codes. Start pairing again on the computer.' : 'The code does not match. Check it and try again.' } }
     }
-    if (Math.abs(Date.now() - body.ts) > MAX_SKEW_MS) {
-      json(res, 400, { error: "The phone's clock is too far from the computer's. Check the time on both." })
-      return
-    }
-    const device: Device = { id: d!, name: (body.name || pending.name).slice(0, 60), createdAt: Date.now(), lastSeen: Date.now(), key: pending.key }
+    if (Math.abs(Date.now() - body.ts) > MAX_SKEW_MS) return { status: 400, json: { error: "The phone's clock is too far from the computer's. Check the time on both." } }
+    const device: Device = { id: d, name: (body.name || pending.name).slice(0, 60), createdAt: Date.now(), lastSeen: Date.now(), key: pending.key }
     this.devices.set(device.id, device)
     this.pairing = undefined
     this.save()
-    log.info('link', `paired ${device.name}`)
+    log.info('link', `paired ${device.name}${r.relayDev ? ' through the relay' : ''}`)
     this.emit()
-    json(res, 200, seal(device.key, { ok: true, host: os.hostname(), platform: process.platform, version: app.getVersion() }))
+    return { status: 200, json: seal(device.key, { ok: true, host: os.hostname(), platform: process.platform, version: app.getVersion(), relay: this.relayInfo() }) }
   }
 
-  private async invoke(req: IncomingMessage, res: ServerResponse, ip: string): Promise<void> {
-    const { d, iv, ct } = (await readJson(req)) as { d: string } & Box
-    const opened = this.openFrom<Envelope & { ch: string; a?: unknown[] }>(res, d, { iv, ct }, ip)
-    if (!opened) return
+  private async invoke(r: Incoming): Promise<Outgoing> {
+    const { d, box } = this.sealedOf(r)
+    const opened = this.openFrom<Envelope & { ch: string; a?: unknown[] }>(d, box, r.peer)
+    if (!('device' in opened)) return opened
     const { device, body } = opened
-    const reply = (value: unknown): void => json(res, 200, seal(device.key, value))
+    const reply = (value: unknown): Outgoing => ({ status: 200, json: seal(device.key, value) })
     const fn = handlers.get(body.ch)
-    // Publishing posts needs the admin's token and stays at the computer.
-    if (!fn || BLOCKED.has(body.ch) || body.ch.startsWith('link:') || body.ch.startsWith('admin:')) {
-      reply({ ok: false, e: 'Not available from the phone' })
-      return
-    }
-    if (NEEDS_APPROVAL_RIGHT.has(body.ch) && !settings.get().link.allowApprovals) {
-      reply({ ok: false, e: 'Approving changes from the phone is turned off on the computer (Settings → Phone).' })
-      return
-    }
-    let args = Array.isArray(body.a) ? body.a : []
+    const access = phoneAccess(body.ch)
+    if (!fn || access === 'desktop') return reply({ ok: false, e: 'Not available from the phone' })
     const mayApprove = settings.get().link.allowApprovals
-    // The phone cannot change how the link itself works, nor turn on automatic approvals without the
-    // right to approve (turning them off is always allowed), nor where updates come from (an update
-    // installs a program on the computer) or the Admin page.
-    if (body.ch === 'settings:set' && args[0] && typeof args[0] === 'object') {
-      const { link: _l, ...rest } = args[0] as Record<string, unknown>
-      const agent = rest.agent as Record<string, unknown> | undefined
-      if (!mayApprove && agent?.autoApprove && typeof agent.autoApprove === 'object') {
-        const offOnly = Object.fromEntries(Object.entries(agent.autoApprove as Record<string, unknown>).filter(([, v]) => v === false))
-        rest.agent = { ...agent, autoApprove: offOnly }
-      }
-      if (rest.updates && typeof rest.updates === 'object') {
-        const { repo: _r, admin: _a, ...keep } = rest.updates as Record<string, unknown>
-        rest.updates = keep
-      }
-      args = [rest]
-    }
-    if (body.ch === 'approvals:setSession' && args[1] === true && !mayApprove) {
-      reply({ ok: false, e: 'Approving changes from the phone is turned off on the computer (Settings → Phone).' })
-      return
-    }
-    if (body.ch === 'settings:reset' && args[0] === 'link') {
-      reply({ ok: false, e: 'Not available from the phone' })
-      return
-    }
+    if (access === 'approve' && !mayApprove) return reply({ ok: false, e: 'Approving changes from the phone is turned off on the computer (Settings → Phone).' })
+    const checked = phoneArgs(body.ch, Array.isArray(body.a) ? body.a : [], mayApprove)
+    if ('refused' in checked) return reply({ ok: false, e: checked.refused })
     try {
-      const r = await fn(...args)
-      reply({ ok: true, r })
+      return reply({ ok: true, r: await fn(...checked.args) })
     } catch (e) {
-      reply({ ok: false, e: (e as Error)?.message ?? String(e) })
+      return reply({ ok: false, e: (e as Error)?.message ?? String(e) })
     }
   }
 
-  private events(url: URL, res: ServerResponse, ip: string): void {
-    const d = url.searchParams.get('d') ?? ''
-    const opened = this.openFrom<Envelope>(res, d, { iv: url.searchParams.get('iv') ?? '', ct: url.searchParams.get('ct') ?? '' }, ip)
-    if (!opened) return
+  private eventsRequest(r: Incoming): Outgoing {
+    const opened = this.openFrom<Envelope>(r.query.get('d') ?? '', { iv: r.query.get('iv') ?? '', ct: r.query.get('ct') ?? '' }, r.peer)
+    if (!('device' in opened)) return opened
+    // Updates go to the device that asked, never to another one in the same relay room.
+    if (r.relayDev && r.relayDev !== opened.device.id) return { status: 400, json: { error: 'Bad request' } }
+    return { status: 200, events: opened.device }
+  }
+
+  /** An event stream on the home network (server-sent events). */
+  private openStream(device: Device, res: ServerResponse): void {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' })
     res.write(': hello\n\n')
-    const client = { device: opened.device, res }
+    const client = { device, res }
     this.clients.add(client)
+    this.sendRelayInfo(device, (frame) => res.write(`data: ${frame}\n\n`), true)
     const ping = setInterval(() => res.write(': ping\n\n'), 20000)
     res.on('close', () => {
       clearInterval(ping)
@@ -419,9 +468,18 @@ class LinkServer {
     this.emit()
   }
 
+  /**
+   * The relay address and room, sealed for one phone as its first update: a phone paired at home learns where
+   * to find this computer away from it (or that it no longer can).
+   */
+  private sendRelayInfo(device: Device, write: (frame: string) => void, sse = false): void {
+    const box = seal(device.key, { ch: 'relay:info', p: this.relayInfo() ?? null })
+    write(sse ? JSON.stringify(box) : JSON.stringify({ ev: box }))
+  }
+
   private forward(channel: string, payload: unknown): void {
     // Link status (with the pairing code) is for this computer's own window only.
-    if (!this.clients.size || channel.startsWith('link:')) return
+    if (channel.startsWith('link:')) return
     for (const c of this.clients) {
       try {
         c.res.write(`data: ${JSON.stringify(seal(c.device.key, { ch: channel, p: payload }))}\n\n`)
@@ -429,32 +487,34 @@ class LinkServer {
         /* closed */
       }
     }
+    if (!this.relayClients.size) return
+    const now = Date.now()
+    for (const [dev, c] of this.relayClients) {
+      if (channel === 'system:status') {
+        if (now - c.statusAt < RELAY_STATUS_MS) continue
+        c.statusAt = now
+      }
+      this.relay.send(dev, JSON.stringify({ ev: seal(c.device.key, { ch: channel, p: payload }) }))
+    }
   }
 
   /** A generated picture or video (only from Maris's own folders), encrypted as a whole. */
-  private async media(req: IncomingMessage, res: ServerResponse, ip: string): Promise<void> {
-    const { d, iv, ct } = (await readJson(req)) as { d: string } & Box
-    const opened = this.openFrom<Envelope & { path: string }>(res, d, { iv, ct }, ip)
-    if (!opened) return
+  private async media(r: Incoming): Promise<Outgoing> {
+    const { d, box } = this.sealedOf(r)
+    const opened = this.openFrom<Envelope & { path: string }>(d, box, r.peer)
+    if (!('device' in opened)) return opened
     const file = path.resolve(String(opened.body.path ?? ''))
-    const roots = [media.outputsDir(), comfy.outputDir(), ...['pasted', 'uploads', 'news-cache'].map((d) => path.join(app.getPath('userData'), d))].map((r) =>
-      path.resolve(r).toLowerCase()
-    )
+    const roots = [media.outputsDir(), comfy.outputDir(), ...['pasted', 'uploads', 'news-cache'].map((x) => path.join(app.getPath('userData'), x))].map((x) => path.resolve(x).toLowerCase())
     const lower = file.toLowerCase()
-    if (!roots.some((r) => lower.startsWith(r + path.sep)) || !existsSync(file) || statSync(file).size > MAX_MEDIA) {
-      json(res, 404, { error: 'Not found' })
-      return
-    }
-    const data = sealBytes(opened.device.key, await fs.readFile(file))
-    res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': String(data.length) })
-    res.end(data)
+    if (!roots.some((x) => lower.startsWith(x + path.sep)) || !existsSync(file) || statSync(file).size > MAX_MEDIA) return { status: 404, json: { error: 'Not found' } }
+    return { status: 200, bytes: sealBytes(opened.device.key, await fs.readFile(file)) }
   }
 
   /** A picture or file sent from the phone, saved where attachments can read it. */
-  private async upload(req: IncomingMessage, res: ServerResponse, ip: string): Promise<void> {
-    const { d, iv, ct } = (await readJson(req)) as { d: string } & Box
-    const opened = this.openFrom<Envelope & { name: string; data: string }>(res, d, { iv, ct }, ip)
-    if (!opened) return
+  private async upload(r: Incoming): Promise<Outgoing> {
+    const { d, box } = this.sealedOf(r)
+    const opened = this.openFrom<Envelope & { name: string; data: string }>(d, box, r.peer)
+    if (!('device' in opened)) return opened
     const dir = path.join(app.getPath('userData'), 'uploads')
     await fs.mkdir(dir, { recursive: true })
     const safe = path.basename(String(opened.body.name || 'upload')).replace(/[^\w.\- ()]/g, '_').slice(-80) || 'upload'
@@ -462,7 +522,7 @@ class LinkServer {
     await fs.writeFile(file, Buffer.from(String(opened.body.data ?? ''), 'base64'))
     const toAttachment = handlers.get('files:attach')
     const [att] = toAttachment ? ((await toAttachment([file])) as unknown[]) : [{ path: file }]
-    json(res, 200, seal(opened.device.key, { ok: true, r: att }))
+    return { status: 200, json: seal(opened.device.key, { ok: true, r: att }) }
   }
 }
 
@@ -520,4 +580,3 @@ export function lanAddresses(): string[] {
 }
 
 export const link = new LinkServer()
-

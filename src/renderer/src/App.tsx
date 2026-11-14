@@ -3,6 +3,7 @@ import { Tooltip } from 'radix-ui'
 import { useEffect, useState } from 'react'
 import { alpha, contrast, cssVars, themeTokens } from '@shared/themes'
 import { ChatView } from './components/chat/ChatView'
+import { CommandPalette } from './components/CommandPalette'
 import { MarisMark } from './components/MarisMark'
 import { Sidebar } from './components/Sidebar'
 import { StatusBar } from './components/StatusBar'
@@ -97,6 +98,7 @@ export default function App() {
   const dismissError = useApp((s) => s.dismissError)
   const onboarded = useApp((s) => s.settings?.onboarded ?? true)
   const setupOpen = useApp((s) => s.setupOpen)
+  const paletteOpen = useApp((s) => s.paletteOpen)
   const toggleSidebar = useApp((s) => s.toggleSidebar)
   const narrow = useNarrow()
   const openSetup = useApp((s) => s.openSetup)
@@ -124,6 +126,10 @@ export default function App() {
       } else if (modKey(e) && e.key.toLowerCase() === 'b') {
         e.preventDefault()
         s.toggleSidebar()
+      } else if (modKey(e) && !e.shiftKey && e.key.toLowerCase() === 'k') {
+        // Ctrl+K: the box for going anywhere (again: closes it).
+        e.preventDefault()
+        if (!s.setupOpen) useApp.setState({ paletteOpen: !s.paletteOpen })
       }
     }
     window.addEventListener('keydown', onKey)
@@ -187,6 +193,7 @@ export default function App() {
         </div>
       )}
       {setupOpen && <SetupView />}
+      {paletteOpen && <CommandPalette />}
     </Tooltip.Provider>
   )
 }

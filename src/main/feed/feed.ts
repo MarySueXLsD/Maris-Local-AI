@@ -9,6 +9,8 @@ import { settings } from '../settings'
 import { Emitter, log } from '../util'
 import { gh, GitHubError, isNewer, raw, rawBase } from './github'
 import { bodyForDisplay, entryFromMarkdown, imageRefs, mergeNews, parseChecksums, pickAsset, postId } from './pure'
+import { RELEASE_KEYS } from '@shared/releaseKeys'
+import { verifySums } from './signature'
 
 let linuxPkg: 'deb' | 'rpm' | null | undefined
 /** How Maris was installed on Linux: from a .deb or .rpm package, or neither (AppImage, tar.gz). */
@@ -138,7 +140,9 @@ class Feed {
               url: rel.html_url,
               publishedAt: rel.published_at,
               asset: pickAsset(rel.assets, process.platform, process.arch, linuxPackage()),
-              checksums: rel.assets.filter((a) => /^SHA256SUMS.*\.txt$/i.test(a.name)).map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size }))
+              checksums: rel.assets
+                .filter((a) => /^SHA256SUMS.*\.txt$/i.test(a.name))
+                .map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size, sig: rel.assets.find((s) => s.name === `${a.name}.sig`)?.browser_download_url }))
             }
           : undefined
       // A download of an older update than this one is of no use any more.
@@ -163,13 +167,28 @@ class Feed {
     this.updateChanged.emit(this.update)
   }
 
-  /** The fingerprint the release publishes for one of its files, if it publishes any. */
+  /**
+   * The fingerprint the release publishes for one of its files. With release keys built in
+   * (src/shared/releaseKeys.ts), the list counts only with a valid signature by one of them: a release
+   * published with stolen GitHub access has none.
+   */
   private async expectedHash(name: string): Promise<string | undefined> {
+    const get = async (url: string): Promise<string | undefined> => {
+      const res = await fetch(url, { headers: { 'User-Agent': 'Maris' }, redirect: 'follow', signal: AbortSignal.timeout(20000) })
+      return res.ok ? res.text() : undefined
+    }
     for (const c of this.update.available?.checksums ?? []) {
       try {
-        const res = await fetch(c.url, { headers: { 'User-Agent': 'Maris' }, redirect: 'follow', signal: AbortSignal.timeout(20000) })
-        if (!res.ok) continue
-        const hash = parseChecksums(await res.text()).get(name)
+        const text = await get(c.url)
+        if (text === undefined) continue
+        if (RELEASE_KEYS.length) {
+          const sig = c.sig ? await get(c.sig) : undefined
+          if (!sig || !verifySums(text, sig, RELEASE_KEYS)) {
+            log.warn('feed', `${c.name} of this release has no valid signature`)
+            continue
+          }
+        }
+        const hash = parseChecksums(text).get(name)
         if (hash) return hash
       } catch {
         /* try the next list */
@@ -193,8 +212,17 @@ class Feed {
     this.setUpdate({ downloading: 0, downloaded: undefined, ready: undefined, error: undefined })
     try {
       const expected = await this.expectedHash(asset.name)
+      // Nothing to check the installer against (the list could not be fetched, or, with release keys, carries
+      // no valid signature): it is not used. The next check tries again.
+      if (!expected) {
+        throw new Error(
+          RELEASE_KEYS.length
+            ? 'This update is not signed with the Maris release key, so it was not installed. If you trust it, download it from the release page.'
+            : 'The fingerprint list of this update could not be read, so the update was not used. Maris tries again at the next check.'
+        )
+      }
       // Already downloaded earlier (Maris was restarted in between): check it and use it.
-      if (existsSync(file) && (!asset.size || statSync(file).size === asset.size) && (!expected || (await sha256File(file)) === expected)) {
+      if (existsSync(file) && (!asset.size || statSync(file).size === asset.size) && (await sha256File(file)) === expected) {
         this.setUpdate({ downloading: undefined, downloaded: file, ready: true })
         this.notifyReady()
         return this.update
@@ -224,7 +252,7 @@ class Feed {
         await new Promise<void>((resolve) => out.end(() => resolve()))
       }
       if (asset.size && got !== asset.size) throw new Error('The download stopped part-way. It is tried again at the next check.')
-      if (expected && hash.digest('hex') !== expected) throw new Error('The download does not match the fingerprint the release publishes, so it was not used.')
+      if (hash.digest('hex') !== expected) throw new Error('The download does not match the fingerprint the release publishes, so it was not used.')
       await fs.rm(file, { force: true })
       await fs.rename(part, file)
       if (process.platform === 'linux') chmodSync(file, 0o755)

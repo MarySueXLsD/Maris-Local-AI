@@ -122,7 +122,7 @@ try {
   await newChat()
   await askToCreate('e')
   check(await askedForApproval(), 'a new chat asks again')
-  await panel().getByRole('button', { name: /^Deny/ }).click()
+  await panel().getByRole('button', { name: 'Deny', exact: true }).click()
   await waitDone()
   check(!existsSync(file('e')), 'denied file e was not created')
 

@@ -122,6 +122,7 @@ function Row({ call, approval }: { call: ToolCallRecord; approval?: ApprovalRequ
             </div>
           )}
           {call.autoApproved && <p className="mt-0.5 text-[0.74rem] text-text-3">{call.autoApproved}</p>}
+          {call.note && denied && <p className="selectable mt-0.5 text-[0.78rem] text-text-2">{call.note}</p>}
           {call.media && running && <MediaProgressCard m={call.media} />}
         </div>
         {hasDetails && !waiting && (
@@ -296,6 +297,7 @@ function WorkStep({ call }: { call: ToolCallRecord }) {
       <span className={cn(denied ? 'text-text-3' : 'text-text-2')}>
         {text}
         {d.outcome && !live(call) && !denied && <span className={cn('ml-1', d.ok === false ? 'text-danger' : 'text-text-3')}>{d.kind === 'edit' || d.kind === 'create' ? d.outcome : `— ${d.outcome}`}</span>}
+        {call.note && denied && <span className="selectable block text-[0.78rem] text-text-2">{call.note}</span>}
       </span>
     </li>
   )

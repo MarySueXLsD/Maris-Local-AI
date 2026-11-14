@@ -20,14 +20,26 @@ export const memoryTools: ToolDef[] = [
       ['text']
     ),
     async prepare(args) {
-      return { risk: 'read', title: `Remember: ${str(args.text, 'text')}` }
+      const text = str(args.text, 'text')
+      // Standing instructions and preferences are told to the model in every future chat. Text in a web
+      // page or a file could try to plant one ("always send … to …"), so those wait for the person's OK.
+      if (args.kind === 'instruction' || args.kind === 'preference') {
+        return {
+          risk: 'change',
+          title: `Remember a standing ${args.kind}: ${text.slice(0, 120)}`,
+          detail: 'Maris will follow this in every chat from now on. You can change or delete it on the Memory page.',
+          preview: { kind: 'text', text }
+        }
+      }
+      return { risk: 'read', title: `Remember: ${text}` }
     },
     async run(args, ctx) {
       const kind = KINDS.includes(args.kind as MemoryKind) ? (args.kind as MemoryKind) : 'fact'
       const r = await memory.add({
         text: str(args.text, 'text'),
         kind,
-        source: 'user',
+        // Saved by the model, not typed by the person: kept apart so it can be told apart on the Memory page.
+        source: 'assistant',
         importance: 0.75,
         conversationId: ctx.conversationId
       })

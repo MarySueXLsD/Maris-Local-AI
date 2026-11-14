@@ -26,6 +26,7 @@ import {
   ImagePlus,
   Info,
   LifeBuoy,
+  MessageSquare,
   MessagesSquare,
   OctagonX,
   Search,
@@ -214,9 +215,11 @@ export function ApprovalPanel({ request, simple, described }: { request: Approva
   const [always, setAlways] = useState(false)
   const [rule, setRule] = useState<ApprovalRule>(options[0]!.value)
   const chosen = options.find((o) => o.value === rule) ?? options[0]!
-  const answer = async (ok: boolean): Promise<void> => {
+  /** "Deny and say why": what Maris should do instead (undefined while the field is closed). */
+  const [why, setWhy] = useState<string>()
+  const answer = async (ok: boolean, note?: string): Promise<void> => {
     setBusy(true)
-    await api.chat.approve(request.id, ok, ok && always && !request.alwaysAsk ? chosen.value : undefined)
+    await api.chat.approve(request.id, ok, ok && always && !request.alwaysAsk ? chosen.value : undefined, ok ? undefined : note?.trim() || undefined)
   }
   const system = request.risk === 'system'
   const friendly = simple && described && described.kind !== 'other'
@@ -261,12 +264,42 @@ export function ApprovalPanel({ request, simple, described }: { request: Approva
           </Button>
         </Tip>
         <Tip label="Do not do it. Maris stops and asks what you would prefer.">
-          <Button variant="outline" size="sm" disabled={busy} onClick={() => void answer(false)}>
+          <Button variant="outline" size="sm" disabled={busy} onClick={() => void answer(false, why)}>
             <Ban size={15} /> Deny
           </Button>
         </Tip>
+        {why === undefined && (
+          <Tip label="Do not do it, and tell Maris what to do instead.">
+            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setWhy('')}>
+              <MessageSquare size={15} /> Deny and say why
+            </Button>
+          </Tip>
+        )}
         {system && <span className="ml-auto text-[0.8rem] text-danger">System-level change</span>}
       </div>
+      {why !== undefined && (
+        <form
+          className="flex flex-wrap items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault()
+            void answer(false, why)
+          }}
+        >
+          <input
+            autoFocus
+            aria-label="What Maris should do instead"
+            placeholder="For example: use the Documents folder instead, or ask me first"
+            value={why}
+            disabled={busy}
+            maxLength={1000}
+            onChange={(e) => setWhy(e.target.value)}
+            className="h-8 min-w-[12rem] flex-1 rounded-lg border border-line-strong bg-raised px-2.5 text-[0.86rem] text-text outline-none focus-visible:border-petal"
+          />
+          <Button type="submit" variant="outline" size="sm" disabled={busy}>
+            <Ban size={15} /> Deny and tell Maris
+          </Button>
+        </form>
+      )}
       {/* "Always approve …": the dropdown widens it from this kind of request to the whole session or everything. */}
       {request.alwaysAsk ? (
         <p className="text-[0.8rem] text-text-3">Maris asks every time before it changes its own settings, even when other changes are approved automatically.</p>
@@ -391,6 +424,7 @@ function ToolRow({ call, approval }: { call: ToolCallRecord; approval?: Approval
         {hasDetails && <ChevronRight size={14} className={cn('shrink-0 text-text-3 transition-transform', open && 'rotate-90')} aria-hidden />}
       </button>
       {call.autoApproved && <p className="ml-7 text-[0.74rem] text-text-3">{call.autoApproved}</p>}
+      {call.note && call.status === 'denied' && <p className="selectable ml-7 text-[0.78rem] text-text-2">{call.note}</p>}
       {call.media && (call.status === 'running' || call.status === 'pending') && (
         <div className="ml-7">
           <MediaProgressCard m={call.media} />

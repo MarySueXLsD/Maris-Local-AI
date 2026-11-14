@@ -124,7 +124,7 @@ try {
     const panel = win.locator('[role="group"][aria-label^="Approval needed"]')
     await panel.waitFor({ timeout: 240000 })
     await shot('07-deny-request')
-    await panel.getByRole('button', { name: 'Deny' }).click()
+    await panel.getByRole('button', { name: 'Deny', exact: true }).click()
     await waitDone()
     check(existsSync(target), 'file still exists after denying')
     await shot('08-denied')

@@ -1,5 +1,7 @@
-import { existsSync, statSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, statSync, readFileSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
+import path from 'node:path'
+import { userDir } from '../paths'
 import type {
   Attachment,
   ChatEvent,
@@ -92,14 +94,69 @@ export const invalidateModels = (): void => {
 
 const TEXT_EXT = /\.(txt|md|markdown|csv|tsv|json|jsonl|xml|html?|css|scss|js|jsx|ts|tsx|mjs|cjs|py|rb|go|rs|java|kt|c|h|cpp|hpp|cs|hx|hxml|ps1|psm1|bat|cmd|sh|ini|cfg|conf|toml|ya?ml|log|sql|env|gitignore|lua|php|swift|r|tex|csproj|sln|vcxproj|cmake|glsl|hlsl|shader)$/i
 
+/** A small text file is read once, when its message is sent, and kept with the message. */
+const ATTACHED_TEXT_MAX = 96 * 1024
+
+/**
+ * Attachments as they are when the message is sent: the text of small text files is kept with them, so
+ * the chat says the same thing later (the file may change) and the model does not read it differently.
+ */
+function snapshotAttachments(list: Attachment[] | undefined): Attachment[] | undefined {
+  return list?.map((a) => {
+    // A picture is kept as a file of its own: inside the message it was megabytes of text that every
+    // opening of the chat, and every answer in it, had to read again.
+    if (a.kind === 'image' && a.dataUrl && !a.stored) {
+      try {
+        const dir = path.join(userDir(), 'uploads')
+        mkdirSync(dir, { recursive: true })
+        const ext = /^data:image\/png/i.test(a.dataUrl) ? 'png' : /^data:image\/webp/i.test(a.dataUrl) ? 'webp' : 'jpg'
+        const stored = path.join(dir, `${a.id.replace(/[^\w-]/g, '')}.${ext}`)
+        writeFileSync(stored, Buffer.from(a.dataUrl.slice(a.dataUrl.indexOf(',') + 1), 'base64'))
+        return { ...a, dataUrl: undefined, stored }
+      } catch (e) {
+        log.warn('agent', 'could not keep the picture as a file; it stays in the message', e)
+        return a
+      }
+    }
+    if (a.kind !== 'file' || a.text !== undefined || !a.path || !TEXT_EXT.test(a.path)) return a
+    try {
+      return existsSync(a.path) && statSync(a.path).size <= ATTACHED_TEXT_MAX ? { ...a, text: readFileSync(a.path, 'utf8') } : a
+    } catch {
+      return a
+    }
+  })
+}
+
+/** Pictures read again recently (a chat is built several times per answer), by file. */
+const imageCache = new Map<string, string>()
+
+/** A picture of a message as base64, from the message (older chats) or from the copy Maris keeps. */
+function imageOf(a: Attachment): string | undefined {
+  if (a.dataUrl) return a.dataUrl.slice(a.dataUrl.indexOf(',') + 1)
+  if (!a.stored) return undefined
+  let b64 = imageCache.get(a.stored)
+  if (b64 === undefined) {
+    try {
+      b64 = readFileSync(a.stored).toString('base64')
+    } catch {
+      return undefined
+    }
+    imageCache.set(a.stored, b64)
+    if (imageCache.size > 12) imageCache.delete(imageCache.keys().next().value as string)
+  }
+  return b64
+}
+
 function fileNote(a: Attachment): string {
   if (a.kind === 'snippet') {
     const where = a.lines ? ` lines="${a.lines[0]}-${a.lines[1]}"` : ''
     return `<selection file="${a.path ?? a.name}"${where}>\n${a.text ?? ''}\n</selection>`
   }
   if (!a.path) return `[Attached file: ${a.name}]`
+  if (a.text !== undefined) return `<file name="${a.name}" path="${a.path}">\n${a.text}\n</file>`
+  // Messages from before attachments were kept: the file as it is now.
   try {
-    if (TEXT_EXT.test(a.path) && existsSync(a.path) && statSync(a.path).size <= 96 * 1024) {
+    if (TEXT_EXT.test(a.path) && existsSync(a.path) && statSync(a.path).size <= ATTACHED_TEXT_MAX) {
       return `<file name="${a.name}" path="${a.path}">\n${readFileSync(a.path, 'utf8')}\n</file>`
     }
   } catch {
@@ -110,35 +167,79 @@ function fileNote(a: Attachment): string {
 
 /** What the model is told when the person says no to an action. */
 const DENIED = 'The user DENIED this action, so it was NOT performed. Do not retry it or work around it. Briefly acknowledge and ask how they would like to proceed.'
-/** How much of a tool's output is kept with the chat, and how much of that a small window is shown. */
+/** The same, when the person also said what they want instead. */
+const deniedSaying = (note: string): string =>
+  `The user DENIED this action, so it was NOT performed. They said what they want instead: "${note}". Follow that; do not repeat the denied action unchanged. If it is unclear, ask.`
+/** For the other actions of a step after one of them was denied: they may build on what was refused. */
+const SKIPPED = 'Not run: the user denied an earlier action in this step, and this one may depend on it. Do not run it again before the user agrees.'
+
+/** Tools that only read and never ask: when a model asks for several at once, they run side by side. */
+const PARALLEL_READS = new Set([
+  'read_file',
+  'list_dir',
+  'search_files',
+  'file_info',
+  'grep',
+  'project_tree',
+  'web_search',
+  'recall',
+  'search_chats',
+  'maris_help',
+  'maris_status',
+  'system_info',
+  'list_processes',
+  'process_output',
+  'view_image'
+])
+
+type ToolOutcome = {
+  content: string
+  images: { b64: string; caption: string }[]
+  endTurn: boolean
+  failed?: boolean
+  denied?: boolean
+  skipped?: boolean
+  /** The call's record, so what the model was shown can be kept with it. */
+  record?: ToolCallRecord
+}
+/** How much of a tool's output the model is shown, and is kept with the chat. */
+const RESULT_SEEN = 16000
+/** When a chat no longer fits its window: recent results keep this much, older ones a few lines. */
 const RESULT_KEPT = 6000
+const RESULT_OLD = 700
+/** A slow computer with a small window: every result is cut to this, during the task and afterwards. */
 const RESULT_SMALL = 1800
 
 function toolResultFor(call: ToolCallRecord, limit: number): string {
   if (call.status === 'denied') return DENIED
   if (call.status === 'error') return `Error: ${call.error ?? 'failed'}`
-  return truncate(call.result ?? '(no output)', limit)
+  // A result is kept already cut to what the model saw; cutting it again would change its wording.
+  return limit >= RESULT_SEEN ? (call.result ?? '(no output)') : truncate(call.result ?? '(no output)', limit)
 }
 
 /**
- * A chat as the model reads it. `small` (a slow computer with a small window) keeps less of each tool
- * result: what an old step returned matters less than having room for the next one.
+ * A chat as the model reads it. Each tool result is what the model was shown while it worked, word for
+ * word: a history that stays the same is one a model does not read again (Ollama keeps what it read, and
+ * API services cache it). Only when the chat does not fit within `fits` tokens do results shrink, recent
+ * ones a little and older ones to a few lines. `small` (a slow computer with a small window) keeps every
+ * result short, the same during the task and afterwards.
  */
-export function buildHistory(history: ChatMessage[], small = false): LlmMessage[] {
-  // Keep recent tool output in full; older tool output shrinks to save context.
+export function buildHistory(history: ChatMessage[], small = false, fits = Infinity): LlmMessage[] {
+  const whole = assemble(history, small, false)
+  if (small || fits === Infinity || whole.reduce((s, m) => s + msgTokens(m), 0) <= fits) return whole
+  return assemble(history, small, true)
+}
+
+function assemble(history: ChatMessage[], small: boolean, shrink: boolean): LlmMessage[] {
   let toolSeen = 0
   const totalTools = history.reduce((n, m) => n + m.parts.filter((p) => p.type === 'tool').length, 0)
-  // In a small window every result is cut to the same short length, in the chat as it was during the
-  // task: results that keep their wording are not read again by a slow processor.
-  const [recentChars, oldChars, keepRecent] = small ? [RESULT_SMALL, RESULT_SMALL, 0] : [RESULT_KEPT, 700, 8]
+  const [recentChars, oldChars, keepRecent] = small ? [RESULT_SMALL, RESULT_SMALL, 0] : shrink ? [RESULT_KEPT, RESULT_OLD, 8] : [RESULT_SEEN, RESULT_SEEN, 0]
   const out: LlmMessage[] = []
   for (const m of history) {
     if (m.role === 'user') {
       const text = messageText(m)
       const files = (m.attachments ?? []).filter((a) => a.kind === 'file' || a.kind === 'snippet').map(fileNote)
-      const images = (m.attachments ?? [])
-        .filter((a) => a.kind === 'image' && a.dataUrl)
-        .map((a) => a.dataUrl!.slice(a.dataUrl!.indexOf(',') + 1))
+      const images = (m.attachments ?? []).flatMap((a) => (a.kind === 'image' ? (imageOf(a) ?? []) : []))
       // The note Maris wrote with this message (time, memories, project state) goes first, unchanged
       // from when the message was sent: an unchanged beginning is what a model does not read twice.
       out.push({ role: 'user', content: [m.context, text, ...files].filter(Boolean).join('\n\n'), ...(images.length ? { images } : {}) })
@@ -152,9 +253,13 @@ export function buildHistory(history: ChatMessage[], small = false): LlmMessage[
         const recent = totalTools - toolSeen < keepRecent
         const id = `call_${p.call.id.replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}`
         out.push({ role: 'assistant', content, tool_calls: [{ id, function: { name: p.call.name, arguments: p.call.args } }] })
-        out.push({ role: 'tool', tool_name: p.call.name, tool_call_id: id, is_error: p.call.status === 'error' || undefined, content: toolResultFor(p.call, recent ? recentChars : oldChars) })
+        // Word for word what the model was shown, unless the chat had to shrink to fit.
+        const replay = !shrink && p.call.seen !== undefined ? p.call.seen : toolResultFor(p.call, recent ? recentChars : oldChars)
+        out.push({ role: 'tool', tool_name: p.call.name, tool_call_id: id, is_error: p.call.status === 'error' || undefined, content: replay })
         content = ''
       } else if (p.type === 'media') content += `\n[Generated ${p.media.kind}: ${p.media.path}]`
+      // The person undid this answer's changes afterwards: what the model did is no longer there.
+      else if (p.type === 'notice' && p.kind === 'undo') content += `\n\n[Later the person undid these changes. ${p.text}]`
     }
     if (content.trim()) out.push({ role: 'assistant', content })
   }
@@ -384,7 +489,7 @@ class Agent {
       conversationId: conv.id,
       role: 'user',
       parts: [{ type: 'text', text: opts.text }],
-      attachments: opts.attachments?.length ? opts.attachments : undefined,
+      attachments: opts.attachments?.length ? snapshotAttachments(opts.attachments) : undefined,
       status: 'done',
       createdAt: now,
       media: opts.media
@@ -746,11 +851,20 @@ class Agent {
             options.num_ctx = grown
           }
         }
+        // A model that is loaded already with a window at least this big keeps it: Ollama loads a model
+        // again whenever the window changes, which takes seconds (minutes on a processor). A bigger window
+        // costs nothing more once it is there; what is read depends on the conversation, not the window.
+        const was = ollama.loadedWith.get(decision.model)
+        const loadedHere = sysNow.ollama.loaded.some((l) => l.name === decision.model)
+        if (was && loadedHere && was.num_ctx > decision.numCtx && was.num_ctx <= decision.numCtx * 4 && was.num_gpu === options.num_gpu) {
+          decision.numCtx = was.num_ctx
+          options.num_ctx = was.num_ctx
+        }
       }
 
       // ---- context compaction: fold older turns into a summary instead of silently dropping them
-      let hist = buildHistory(history, small)
       const budget = decision.numCtx - reserved() - answerRoom(decision.numCtx)
+      let hist = buildHistory(history, small, budget * cfg.agent.compactAt)
       if (cfg.agent.autoCompact && hist.reduce((s, m) => s + msgTokens(m), 0) > budget * cfg.agent.compactAt && history.length > (small ? 4 : 6)) {
         let keepTokens = 0
         let cut = history.length
@@ -770,7 +884,7 @@ class Agent {
           const n = await this.compactMessages(conv, older, decision.model, options, ctrl.signal, small)
           msg.parts[ni] = { type: 'notice', text: `Compacted ${n} earlier messages into a summary to keep the context window free.`, tone: 'info' }
           history = history.slice(cut)
-          hist = buildHistory(history, small)
+          hist = buildHistory(history, small, budget * cfg.agent.compactAt)
           sys = buildSystem()
         } catch (e) {
           if (ctrl.signal.aborted) throw e
@@ -994,27 +1108,47 @@ class Agent {
         let stepFailed = calls.length > 0
         let stuck = false
         const offered = new Set(allTools.map((t) => t.name))
-        for (const call of calls) {
-          if (ctrl.signal.aborted) break
-          const r = await this.execTool(msg, conv, call, ctrl, canSee, offered, small)
-          const sig = `${call.function.name} ${JSON.stringify(parseArgs(call.function.arguments))}`
-          same = sig === same.sig ? { sig, n: same.n + 1 } : { sig, n: 1 }
-          let content = r.content
-          if (r.failed) {
-            const n = (failures.get(sig) ?? 0) + 1
-            failures.set(sig, n)
-            if (n >= 2) content += `\n\nNote from Maris: this exact step has now failed ${n} times. Do not repeat it unchanged. Read the error, fix its cause (syntax, path, a missing program) or take a different approach.`
-          } else {
-            failures.delete(sig)
-            stepFailed = false
-          }
-          if (same.n >= 4) content += `\n\nNote from Maris: you have made this same call ${same.n} times in a row. Use its result and move on to the next part of the task.`
-          if (same.n >= 10) stuck = true
-          // Results in another writing system (file names, web pages) can pull a small model into that language.
-          if (lang && foreignLetters(lang, content) >= 5) content += `\n\n(Answer the user in ${lang.name}.)`
-          messages.push({ role: 'tool', tool_name: call.function.name, tool_call_id: call.id, is_error: r.failed || undefined, content })
-          for (const img of r.images) messages.push({ role: 'user', content: img.caption, images: [img.b64] })
-          if (r.endTurn) endTurn = true
+        const running = models.find((x) => x.name === model)
+        // A model at a service on the internet: what tools return goes there (screenshots and the clipboard ask first).
+        const away = running?.remote ? (running.providerName ?? 'an API service') : undefined
+        let deniedHere = false
+        for (let i = 0; i < calls.length && !ctrl.signal.aborted; ) {
+          // Several reads asked for at once (files, folders, searches) run side by side; anything that may
+          // change something or ask for a click runs on its own, in order.
+          let n = 1
+          if (PARALLEL_READS.has(calls[i]!.function.name)) while (i + n < calls.length && n < 8 && PARALLEL_READS.has(calls[i + n]!.function.name)) n++
+          const batch = calls.slice(i, i + n)
+          i += n
+          // After a "no", the rest of the step is not run: it may build on what was refused.
+          const results = deniedHere ? batch.map((c) => this.skipCall(msg, c)) : await Promise.all(batch.map((c) => this.execTool(msg, conv, c, ctrl, canSee, offered, small, away)))
+          batch.forEach((call, k) => {
+            const r = results[k]!
+            if (r.denied) deniedHere = true
+            if (r.skipped) {
+              if (r.record) r.record.seen = r.content
+              messages.push({ role: 'tool', tool_name: call.function.name, tool_call_id: call.id, content: r.content })
+              return
+            }
+            const sig = `${call.function.name} ${JSON.stringify(parseArgs(call.function.arguments))}`
+            same = sig === same.sig ? { sig, n: same.n + 1 } : { sig, n: 1 }
+            let content = r.content
+            if (r.failed) {
+              const n = (failures.get(sig) ?? 0) + 1
+              failures.set(sig, n)
+              if (n >= 2) content += `\n\nNote from Maris: this exact step has now failed ${n} times. Do not repeat it unchanged. Read the error, fix its cause (syntax, path, a missing program) or take a different approach.`
+            } else {
+              failures.delete(sig)
+              stepFailed = false
+            }
+            if (same.n >= 4) content += `\n\nNote from Maris: you have made this same call ${same.n} times in a row. Use its result and move on to the next part of the task.`
+            if (same.n >= 10) stuck = true
+            // Results in another writing system (file names, web pages) can pull a small model into that language.
+            if (lang && foreignLetters(lang, content) >= 5) content += `\n\n(Answer the user in ${lang.name}.)`
+            if (r.record && content !== r.record.result) r.record.seen = content
+            messages.push({ role: 'tool', tool_name: call.function.name, tool_call_id: call.id, is_error: r.failed || undefined, content })
+            for (const img of r.images) messages.push({ role: 'user', content: img.caption, images: [img.b64] })
+            if (r.endTurn) endTurn = true
+          })
         }
         repo.saveMessage(msg)
         // A service was asked for (or, on a slow computer, a tool outside the short list was used): the
@@ -1305,8 +1439,10 @@ class Agent {
     /** The tools this chat may use; others do not run (web tools while web access is off, say). */
     offered?: Set<string>,
     /** A small context window: the model is shown a short cut of long results. */
-    small = false
-  ): Promise<{ content: string; images: { b64: string; caption: string }[]; endTurn: boolean; failed?: boolean }> {
+    small = false,
+    /** The service the answering model runs at, when it is on the internet. */
+    away?: string
+  ): Promise<ToolOutcome> {
     // The model wrote an action whose arguments are not valid JSON (cut off, or badly quoted). It is
     // never run on a guess at what was meant: the model gets its own text back and writes it again.
     if (call.invalid !== undefined) {
@@ -1319,7 +1455,8 @@ class Agent {
         content: `${JSON.stringify({ INVALID_JSON: truncate(call.invalid, 1500) })}\nYour tool call was not valid JSON, so it was not run. Write it again as one JSON object: double quotes around every name and string, \\n for a line break inside a string, no text around it.`,
         images: [],
         endTurn: false,
-        failed: true
+        failed: true,
+        record: rec
       }
     }
     // Small models make up tool names ("system_information", "system_tool_system_info") or call a shell
@@ -1347,7 +1484,8 @@ class Agent {
         content: `Error: there is no tool named "${name}". To run a ${SHELL_LABEL} command use run_command; to find files use search_files; to read a file use read_file. Call one of the listed tools yourself instead of asking the user to run anything.`,
         images,
         endTurn,
-        failed: true
+        failed: true,
+        record: rec
       }
     }
     const cfg = settings.get()
@@ -1361,6 +1499,7 @@ class Agent {
       cwd: code ? conv.projectDir! : os.homedir(),
       projectDir: code ? conv.projectDir : undefined,
       modelSupportsVision: canSee,
+      away,
       progress: (t) => {
         rec.progress = t
         update()
@@ -1438,9 +1577,10 @@ class Agent {
           if (!answer.approved) {
             rec.status = 'denied'
             rec.endedAt = Date.now()
+            if (answer.note) rec.note = `You said: ${answer.note}`
             update()
             if (ctrl.signal.aborted) throw new Error('aborted')
-            return { content: DENIED, images, endTurn }
+            return { content: answer.note ? deniedSaying(answer.note) : DENIED, images, endTurn, denied: true, record: rec }
           }
           if (answer.rule && !ALWAYS_ASK.has(name)) rec.autoApproved = this.applyRule(answer.rule, { conversationId: conv.id, tool: name, risk: prep.risk, projectDir: live.projectDir, allowPrefix: prep.allowPrefix })
         }
@@ -1451,7 +1591,7 @@ class Agent {
       const out = await def.run(args, ctx)
       log.info('agent', `tool ${name} done (${out.length} chars)`)
       rec.status = 'done'
-      rec.result = truncate(out, RESULT_KEPT)
+      rec.result = truncate(out, RESULT_SEEN)
       rec.progress = undefined
       rec.endedAt = Date.now()
       update()
@@ -1461,7 +1601,7 @@ class Agent {
       const exit = /^\((?:exit code|exit) (-?\d+|\?)/m.exec(head)
       const failed = Boolean(exit && exit[1] !== '0') || /^\((?:timed out after|exit [^)\n]*timed out)/m.test(head)
       // A small window is shown the same short cut that the chat keeps, word for word (see buildHistory).
-      return { content: small ? truncate(rec.result, RESULT_SMALL) : truncate(out, 16000), images, endTurn, failed }
+      return { content: small ? truncate(rec.result, RESULT_SMALL) : rec.result, images, endTurn, failed, record: rec }
     } catch (e) {
       if (ctrl.signal.aborted) throw e
       rec.status = 'error'
@@ -1470,8 +1610,27 @@ class Agent {
       rec.progress = undefined
       rec.endedAt = Date.now()
       update()
-      return { content: `Error: ${errMsg(e)}`, images, endTurn, failed: true }
+      return { content: `Error: ${errMsg(e)}`, images, endTurn, failed: true, record: rec }
     }
+  }
+
+  /** An action of a step after another one in it was denied: shown as not run, and the model told why. */
+  private skipCall(msg: ChatMessage, call: LlmToolCall): ToolOutcome {
+    const args = parseArgs(call.function.arguments)
+    const rec: ToolCallRecord = {
+      id: uid(),
+      name: call.function.name,
+      args,
+      risk: 'read',
+      status: 'denied',
+      title: humanTool(call.function.name, args),
+      note: 'Not run, because you said no to the step before it.',
+      startedAt: Date.now(),
+      endedAt: Date.now()
+    }
+    msg.parts.push({ type: 'tool', call: rec })
+    this.emitPart(msg, msg.parts.length - 1)
+    return { content: SKIPPED, images: [], endTurn: false, skipped: true, record: rec }
   }
 
   /** The next bigger model that can run right now (not while the graphics card is making media). */

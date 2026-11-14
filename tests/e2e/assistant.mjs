@@ -152,7 +152,7 @@ try {
       const what = await pending.getAttribute('aria-label')
       const ok = /spool/i.test(what ?? '') && !/administrator/i.test(what ?? '')
       console.log(`  ${ok ? 'approving' : 'denying'}: ${what}`)
-      await pending.getByRole('button', { name: ok ? 'Approve' : 'Deny' }).click()
+      await pending.getByRole('button', { name: ok ? 'Approve' : 'Deny', exact: true }).click()
     }
     if (!(await win.locator('button[aria-label="Stop"]').isVisible().catch(() => false)) && !(await card.isVisible().catch(() => false))) {
       await win.waitForTimeout(1500)

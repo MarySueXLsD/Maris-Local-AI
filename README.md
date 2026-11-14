@@ -8,7 +8,7 @@ Maris runs on your computer: chat, a coding agent for your projects, a PC assist
 
 The models run on your own machine through Ollama. If you want, Maris also answers with **Claude, GPT, Gemini or any OpenAI-compatible service** through your own API key, with the same tools and the same approvals, and it always shows which chats leave the computer.
 
-A setup assistant scans the computer and chooses models that suit it, from a 24 GB graphics card down to an old laptop with 4 GB of memory and no graphics card at all. Maris runs on **Windows**, **macOS** (Apple chips and Intel) and **Linux** (NVIDIA, AMD, Intel or CPU only), and the **Android app** uses it from your phone over your home Wi-Fi, end-to-end encrypted.
+A setup assistant scans the computer and chooses models that suit it, from a 24 GB graphics card down to an old laptop with 4 GB of memory and no graphics card at all. Maris runs on **Windows**, **macOS** (Apple chips and Intel) and **Linux** (NVIDIA, AMD, Intel or CPU only), and the **Android app** uses it from your phone, at home over Wi-Fi or from anywhere through a relay, end-to-end encrypted.
 
 **[Watch the trailer on YouTube →](https://youtu.be/oCeyilxar-4)**
 
@@ -57,12 +57,12 @@ On first start the **setup assistant** scans the graphics card, CPU, RAM and dis
 
 ## Features
 
-- **Chat**: Markdown, code, math and tables, attachments, thinking, regenerate with another model. Answers stay in your language, and paths in answers open the folder. The context ring next to Send shows what fills the chat and lets you pick the window size, from 4K up to 2M tokens, with what each size costs in speed and memory on your computer (or per message, for an API model).
+- **Chat**: Markdown, code, math and tables, attachments, thinking, regenerate with another model, branch a chat from any answer, and export it as Markdown or JSON. Answers stay in your language, and paths in answers open the folder. The context ring next to Send shows what fills the chat and lets you pick the window size, from 4K up to 2M tokens, with what each size costs in speed and memory on your computer (or per message, for an API model).
 - **Code mode**: pick a project folder and Maris explores, edits several files at once, builds, runs tests and dev servers, and keeps a visible plan. A file tree, a viewer where you can mention selected lines, and a list of changes with diffs and one-click revert.
 - **Automatic model choice**: every message goes to the Fast, Balanced or Max model, stepping down when a game or another program needs the graphics card, on battery, or while pictures render.
 - **API models** (optional): **Models → API** connects Claude, OpenAI, Google Gemini, OpenRouter, Groq, Mistral, DeepSeek, xAI, LM Studio, a llama.cpp server or any OpenAI-compatible address. Maris reads each service's model list from the service, so new models appear without an update, and it learns what a model cannot do (tools, pictures, thinking, a refused option) from the service's own replies instead of from a list in the app. An API model answers only when you pick it for a chat or give it a role; those chats carry a cloud, and keys are stored with the system keychain. Maris shows what each answer cost, keeps a record per day and model, and can tell you when a monthly amount is passed; prices are looked up as data (or set by you), so they need no update of the app either.
 - **Slow computers**: without a usable graphics card and with little memory or an old processor, setup picks one small model for every role and **low-power mode** turns on: short instructions, only the tools a request needs, no background model calls and a plain window. Models without tool calling of their own get the tools described in text and can still use them.
-- **Approvals**: reading is free; creating, editing, deleting, commands that change things and opening programs wait for **Approve**. Deletes go to the Recycle Bin or Trash and edited files are backed up. **Always approve** rules are optional, always visible and switch off in one click.
+- **Approvals**: reading is free; creating, editing, deleting, commands that change things and opening programs wait for **Approve**. Deletes go to the Recycle Bin or Trash and edited files are backed up; **Undo changes** under an answer puts back everything it did to files. **Deny and say why** tells Maris what to do instead. **Always approve** rules are optional, always visible and switch off in one click.
 - **Full control** (off until you turn it on, also from a button Maris shows in the chat when a task needs it): run things as administrator and use the mouse and keyboard in other programs, each action approved by you.
 - **Memory** that learns facts and preferences from your chats; everything is editable.
 - **Web**: search and read pages in a hidden sandboxed browser.
@@ -71,7 +71,7 @@ On first start the **setup assistant** scans the graphics card, CPU, RAM and dis
 - **Closing**: closing the window closes Maris completely, unloads its models and stops the Ollama server, so no video memory stays in use; it asks first if an answer, a picture or a download is still going. Staying in the tray is a setting, and frees video memory after a minute.
 - **Status bar** with CPU, RAM, GPU, VRAM, temperature, power and loaded models. When other programs fill half the VRAM, it lists the biggest and can end one after asking.
 - **Help** with plain-language articles, explanations on hover, and a Simple view for people who do not program. Maris reads the same articles: ask it "how do I connect Claude?" or "which models do I have?" and it answers from the help and from what is set up, with a link that opens the right page.
-- **Themes**: light and dark, seven colour themes and a custom one. Full keyboard use, screen-reader labels, text size, high contrast and reduced motion.
+- **Themes**: light and dark, seven colour themes and a custom one. Full keyboard use (**Ctrl+K** goes to any chat, setting, help article or action), screen-reader labels, text size, high contrast and reduced motion.
 - **Settings**: every option is searchable, resettable and can be exported. Ask Maris in the chat to change one; it asks every time.
 
 ### Models it picks
@@ -91,7 +91,7 @@ With **GPU + CPU**, bigger models spill into system RAM: slower, but smarter. An
 
 Turn on **Settings → Phone**, press **Pair a phone**, and scan the QR code with the app. The phone shows the same chats, Code mode, approvals, pictures and settings; everything still runs on the computer.
 
-The link is off by default and only accepts phones on your own network (or a VPN such as Tailscale). Pairing uses a one-time code and an ECDH key exchange, and every message is encrypted with AES-256-GCM and protected against replay. The phone cannot install updates, run setup or change the link settings, and approving from the phone can be turned off.
+The link is off by default and only accepts phones on your own network (or a VPN such as Tailscale). With **Connect from anywhere** on, the phone also reaches the computer on mobile data or another Wi-Fi through a relay that both connect out to, so nothing is opened on the router; at home it still connects directly. The relay passes the encrypted messages on and cannot read them (see [relay/README.md](relay/README.md) for what it sees and how to run one). Pairing uses a one-time code and an ECDH key exchange, and every message is encrypted with AES-256-GCM and protected against replay. The phone cannot install updates, run setup or change the link settings, and approving from the phone can be turned off.
 
 ## Terminal command
 

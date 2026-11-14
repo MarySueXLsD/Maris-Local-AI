@@ -1,4 +1,5 @@
 import type { ApprovalRule } from '@shared/approval'
+import type { UndoResult } from '@shared/chatExport'
 import type {
   AdminStatus,
   ConnectorInfo,
@@ -91,14 +92,16 @@ export interface MarisApi {
     regenerate(messageId: string, model?: string, think?: ThinkMode): Promise<void>
     edit(messageId: string, text: string): Promise<void>
     feedback(messageId: string, value: 1 | -1 | 0, note?: string): Promise<void>
-    /** `rule`: also "Always approve …" with this scope. */
-    approve(id: string, approved: boolean, rule?: ApprovalRule): Promise<boolean>
+    /** `rule`: also "Always approve …" with this scope. `note`: with a denial, what Maris should do instead. */
+    approve(id: string, approved: boolean, rule?: ApprovalRule, note?: string): Promise<boolean>
     approvals(): Promise<ApprovalRequest[]>
     autoEdits(conversationId: string, on: boolean): Promise<void>
     compact(conversationId: string): Promise<number>
     previewRoute(text: string, attachments?: Attachment[], model?: string, think?: ThinkMode, mode?: 'chat' | 'code'): Promise<RouteDecision | undefined>
     /** What fills the chat's context window (a new chat: what it would start with). */
     context(conversationId?: string, draft?: { mode?: ChatMode; projectDir?: string; model?: string }): Promise<ContextUsage>
+    /** Undo what this answer changed in files. Each step says whether it worked. */
+    undoAnswer(messageId: string): Promise<UndoResult[]>
     onEvent(cb: (e: ChatEvent) => void): Off
   }
   approvals: {
@@ -117,6 +120,10 @@ export interface MarisApi {
     remove(id: string): Promise<void>
     search(q: string): Promise<{ conversationId: string; messageId: string; snippet: string; title: string }[]>
     running(): Promise<string[]>
+    /** The chat as a file: Markdown, or JSON with everything. */
+    exportChat(id: string, format: 'md' | 'json'): Promise<{ name: string; content: string }>
+    /** A new chat with the messages up to and including this one. */
+    branch(messageId: string): Promise<Conversation>
   }
   models: {
     list(force?: boolean): Promise<ModelInfo[]>
@@ -225,6 +232,8 @@ export interface MarisApi {
     pickImage(): Promise<string | undefined>
     attach(paths: string[]): Promise<Attachment[]>
     saveImage(dataUrl: string): Promise<string>
+    /** Save text (an exported chat) where the person picks; undefined when they cancel. Desktop only. */
+    saveText(name: string, content: string): Promise<string | undefined>
     pathFor(file: File): string
   }
   shell: {

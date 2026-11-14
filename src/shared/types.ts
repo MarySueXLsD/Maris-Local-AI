@@ -191,7 +191,9 @@ export interface Attachment {
   mime: string
   size: number
   path?: string // for files on disk
-  dataUrl?: string // for images (base64 data URL)
+  dataUrl?: string // for images (base64 data URL), until the message is sent
+  /** For images in a sent message: the copy Maris keeps (a JPEG in its uploads folder), instead of dataUrl. */
+  stored?: string
   /** For snippets: the selected text and the first and last line it covers. */
   text?: string
   lines?: [number, number]
@@ -277,6 +279,10 @@ export interface ToolCallRecord {
   backup?: string // backup of the file before the change (for revert)
   targets?: string[] // files or folders the call touches
   autoApproved?: string // why it ran without asking (only for rules the user enabled)
+  /** What the person said when denying it, or why it was not run (an earlier step was denied). */
+  note?: string
+  /** What the model was shown for this call, when it differs from `result` (notes added, a shorter cut). */
+  seen?: string
   startedAt?: number
   endedAt?: number
   approvalId?: string
@@ -324,7 +330,15 @@ export type Part =
   | { type: 'thinking'; text: string; durationMs?: number }
   | { type: 'tool'; call: ToolCallRecord }
   | { type: 'media'; media: MediaResult }
-  | { type: 'notice'; text: string; tone?: 'info' | 'warn'; /** A chat the notice is about ("the video is being made there"). */ conversationId?: string }
+  | {
+      type: 'notice'
+      text: string
+      tone?: 'info' | 'warn'
+      /** A chat the notice is about ("the video is being made there"). */
+      conversationId?: string
+      /** 'undo': the person undid this answer's file changes; the model is told too. */
+      kind?: 'undo'
+    }
 
 export interface MessageStats {
   promptTokens?: number
@@ -517,7 +531,8 @@ export interface Memory {
   id: string
   text: string
   kind: MemoryKind
-  source: 'user' | 'learned' | 'feedback'
+  /** user: saved on the Memory page or on request; assistant: saved by the model with its remember tool. */
+  source: 'user' | 'assistant' | 'learned' | 'feedback'
   importance: number // 0..1
   pinned: boolean
   uses: number
@@ -820,6 +835,10 @@ export interface Settings {
     gpuReserveMB: number
     firstTokenTimeoutSec: number
     idleTimeoutSec: number
+    /** Flash attention in the Ollama server Maris starts: less memory for the context window, often faster. */
+    flashAttention: boolean
+    /** How the Ollama server Maris starts stores the context window: q8_0 takes half the memory of f16, q4_0 a quarter. */
+    kvCache: 'f16' | 'q8_0' | 'q4_0'
   }
   generation: Record<'fast' | 'balanced' | 'max' | 'code', GenParams>
   routing: {
@@ -942,6 +961,10 @@ export interface Settings {
     port: number
     /** Paired phones may approve changes on this computer. */
     allowApprovals: boolean
+    /** Phones reach Maris from anywhere through the Maris relay, not only on the home network. */
+    anywhere: boolean
+    /** Another relay than the built-in one (wss://…); empty uses Maris's own. */
+    relayUrl: string
   }
   onboarded: boolean
 }
@@ -954,7 +977,12 @@ export interface LinkDevice {
   lastSeen?: number
   /** Connected right now (listening for updates). */
   online?: boolean
+  /** How it is connected: on the home network, or through the relay. */
+  via?: 'lan' | 'relay'
 }
+
+/** The computer's connection to the Maris relay. */
+export type RelayState = 'off' | 'connecting' | 'online' | 'unreachable'
 
 export interface LinkStatus {
   enabled: boolean
@@ -966,6 +994,8 @@ export interface LinkStatus {
   devices: LinkDevice[]
   pairing?: { code: string; expiresAt: number; url: string }
   error?: string
+  /** "Connect from anywhere": the relay in use and whether Maris is connected to it. */
+  relay?: { state: RelayState; url: string; error?: string }
 }
 
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] }

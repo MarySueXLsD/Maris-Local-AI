@@ -186,6 +186,14 @@ const keepHelpLinks = (url: string): string => (/^help:[a-z0-9-]+$/i.test(url) |
 /** Picture sources are checked by MarkdownImage, which only shows local or embedded pictures. */
 const transformUrl = (url: string, key: string): string => (key === 'src' ? url : keepHelpLinks(url))
 
+const REMARK = [remarkGfm, remarkMath, remarkPaths, remarkPages]
+const REHYPE: Parameters<typeof ReactMarkdown>[0]['rehypePlugins'] = [[rehypeHighlight, { detect: false, ignoreMissing: true }], rehypeKatex]
+/**
+ * While an answer streams, it is drawn again a few times a second: code is coloured and formulas are set
+ * once it is finished, instead of all of it again on every few words.
+ */
+const REHYPE_STREAMING: typeof REHYPE = []
+
 /**
  * Pictures in Markdown: Maris's own cached files (news posts), embedded data (the post editor's
  * preview) or names the caller resolves. Pictures on the internet are never loaded directly.
@@ -214,8 +222,8 @@ export const Markdown = memo(function Markdown({
     <div className={`prose-maris selectable ${streaming ? 'caret' : ''}`}>
       <ReactMarkdown
         urlTransform={transformUrl}
-        remarkPlugins={[remarkGfm, remarkMath, remarkPaths, remarkPages]}
-        rehypePlugins={[[rehypeHighlight, { detect: false, ignoreMissing: true }], rehypeKatex]}
+        remarkPlugins={REMARK}
+        rehypePlugins={streaming ? REHYPE_STREAMING : REHYPE}
         components={{
           pre: ({ children }) => {
             const child = Array.isArray(children) ? children[0] : children

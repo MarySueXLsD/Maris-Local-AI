@@ -149,9 +149,15 @@ async function phoneFact(cfg: Settings): Promise<string> {
   if (!cfg.link.enabled) return `Phone app: the link is off. It is turned on in ${settingsPage('phone')}.`
   // Loaded here, not at the top: the link server reaches back to the chat machinery that owns these tools.
   const { link } = await import('../link/server')
-  const devices = link.status().devices
-  const phones = devices.length ? `${devices.length} paired (${some(devices.map((d) => `${d.name}${d.online ? ', connected now' : ''}`), 5)})` : 'no phone paired yet'
-  return `Phone app: the link is on, ${phones}. Approving changes from the phone is ${cfg.link.allowApprovals ? 'allowed' : 'not allowed'}.`
+  const st = link.status()
+  const devices = st.devices
+  const phones = devices.length ? `${devices.length} paired (${some(devices.map((d) => `${d.name}${d.online ? (d.via === 'relay' ? ', connected now through the relay' : ', connected now') : ''}`), 5)})` : 'no phone paired yet'
+  const away = !cfg.link.anywhere
+    ? `Connect from anywhere is off, so phones connect only on this network (it is turned on in ${settingsPage('phone')}).`
+    : st.relay?.state === 'online'
+      ? 'Connect from anywhere is on: phones reach Maris from any network through the Maris relay, end-to-end encrypted.'
+      : `Connect from anywhere is on, but Maris is not connected to the relay right now${st.relay?.url ? '' : ' (no relay address is set)'}.`
+  return `Phone app: the link is on, ${phones}. ${away} Approving changes from the phone is ${cfg.link.allowApprovals ? 'allowed' : 'not allowed'}.`
 }
 
 function updatesFact(cfg: Settings): string {

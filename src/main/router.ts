@@ -15,6 +15,7 @@ import { isRemoteModel } from '@shared/providers'
 import { looseJson } from '@shared/textTools'
 import { repo } from './db'
 import { llm } from './engines/llm'
+import { ollama } from './engines/ollama'
 import { localOptions } from './memory/utility'
 import { clamp, log } from './util'
 
@@ -249,10 +250,11 @@ export function localContext(cfg: Settings, tier: Tier | 'custom', code: boolean
 /**
  * Video memory a model needs, in MB: its weights (with the vision projector), the context window's
  * cache (about 0.5 GB per 16K tokens for the big models, 0.3 GB for the others) and buffers. Calibrated on
- * a 16 GB card; the context popover uses the same estimate to say what a bigger window costs.
+ * a 16 GB card; the context popover uses the same estimate to say what a bigger window costs. `kvScale`:
+ * the window's share when Ollama stores it compactly (0.5 for q8_0, 0.25 for q4_0).
  */
-export function vramNeedMB(weightsMB: number, big: boolean, ctx: number): number {
-  return weightsMB + (ctx / 16384) * (big ? 520 : 320) + 350
+export function vramNeedMB(weightsMB: number, big: boolean, ctx: number, kvScale = ollama.kvScale()): number {
+  return weightsMB + (ctx / 16384) * (big ? 520 : 320) * kvScale + 350
 }
 
 export function prettyModel(name: string): string {

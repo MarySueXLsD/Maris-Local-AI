@@ -16,7 +16,9 @@ export const DEFAULT_SETTINGS: Settings = {
     cpuThreads: 0,
     gpuReserveMB: 250,
     firstTokenTimeoutSec: 240,
-    idleTimeoutSec: 180
+    idleTimeoutSec: 180,
+    flashAttention: true,
+    kvCache: 'q8_0'
   },
   generation: { fast: gen(), balanced: gen(), max: gen(), code: gen() },
   routing: {
@@ -81,7 +83,7 @@ export const DEFAULT_SETTINGS: Settings = {
   usage: { track: true, priceLookup: true, monthlyBudget: 0 },
   updates: { check: true, autoDownload: true, intervalHours: 6, repo: 'MarySueXLsD/Maris-Local-AI', news: true, admin: false },
   extensions: { skills: true, connectors: true },
-  link: { enabled: false, port: 7341, allowApprovals: true },
+  link: { enabled: false, port: 7341, allowApprovals: true, anywhere: false, relayUrl: '' },
   onboarded: false
 }
 
@@ -98,6 +100,44 @@ export function deepMerge<T>(base: T, patch: unknown): T {
   }
   return out as T
 }
+
+/** The range a number setting may take (from the Settings page's own limits). */
+export type NumberRanges = Map<string, { min?: number; max?: number }>
+
+const plain = (v: unknown): boolean => v === undefined || v === null || typeof v === 'string' || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v))
+
+/**
+ * A settings change without values of the wrong kind: a number where a number belongs (kept within the
+ * range the Settings page allows), a switch where a switch belongs, and so on. What does not fit is left
+ * out, so a broken or hand-edited backup, or an older phone app, cannot leave Maris with a setting it
+ * cannot use. Settings without a default (a model for a role, a temperature) take any plain value.
+ */
+export function cleanPatch(patch: unknown, base: unknown = DEFAULT_SETTINGS, ranges: NumberRanges = new Map(), prefix = ''): Record<string, unknown> {
+  if (!isObj(patch)) return {}
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(patch)) {
+    const path = prefix ? `${prefix}.${key}` : key
+    const def = isObj(base) ? base[key] : undefined
+    if (isObj(def) || (def === undefined && isObj(value))) {
+      if (isObj(value)) out[key] = cleanPatch(value, def, ranges, path)
+      continue
+    }
+    if (def === undefined ? !plain(value) : typeof value !== typeof def) continue
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) continue
+      const r = ranges.get(path)
+      out[key] = Math.min(r?.max ?? value, Math.max(r?.min ?? value, value))
+    } else out[key] = value
+  }
+  return out
+}
+
+/**
+ * Settings that a settings file being loaded never changes: what Maris may do without asking, full control,
+ * the phone link, where updates come from and where chats and pictures are sent. A file someone shares
+ * ("my theme") could otherwise switch them on without a word.
+ */
+export const PROTECTED_ON_IMPORT = ['agent.autoApprove', 'agent.fullControl', 'link', 'updates.repo', 'updates.admin', 'ollamaUrl', 'comfyUrl', 'media.extraArgs'] as const
 
 /** Read a dotted path such as "ui.status.ram". */
 export function getPath(obj: unknown, path: string): unknown {

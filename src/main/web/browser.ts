@@ -2,6 +2,7 @@ import { BrowserWindow, session, type Session } from 'electron'
 import { readFileSync } from 'node:fs'
 import TurndownService from 'turndown'
 import { settings } from '../settings'
+import { isLocalHost } from '../tools/webGuard'
 import { log, sleep, truncate } from '../util'
 
 export interface SearchResult {
@@ -23,12 +24,31 @@ let webSession: Session | undefined
 let readabilitySrc: string | undefined
 const cache = new Map<string, { at: number; page: PageResult }>()
 
+/**
+ * Hosts on this computer or the home network that a page the person approved may reach while it is open
+ * (counted: such pages can overlap). Everything else that is local stays out of reach of web pages.
+ */
+const localAllowed = new Map<string, number>()
+
 function getSession(): Session {
   if (webSession) return webSession
   const s = session.fromPartition(PARTITION)
   s.setPermissionRequestHandler((_wc, _perm, cb) => cb(false))
   s.setPermissionCheckHandler(() => false)
   s.on('will-download', (e) => e.preventDefault())
+  // A web page may not reach into this computer or the home network (Ollama, ComfyUI, the router, a
+  // printer): not by a redirect, a picture, a script or a form. Only a local page the person approved
+  // reaches its own host.
+  s.webRequest.onBeforeRequest((details, cb) => {
+    if (!/^(https?|wss?):/i.test(details.url)) return cb({})
+    let host = ''
+    try {
+      host = new URL(details.url).hostname.toLowerCase()
+    } catch {
+      return cb({ cancel: true })
+    }
+    cb({ cancel: isLocalHost(host) && !localAllowed.has(host) })
+  })
   s.setUserAgent(s.getUserAgent().replace(/\s(Electron|maris|Maris)\/\S+/g, ''))
   webSession = s
   return s
@@ -85,10 +105,18 @@ async function withPage<T>(url: string, fn: (win: BrowserWindow) => Promise<T>, 
 const turndown = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', bulletListMarker: '-' })
 turndown.remove(['script', 'style', 'noscript', 'iframe', 'svg', 'form', 'button'] as (keyof HTMLElementTagNameMap)[])
 
-export async function fetchPage(url: string, opts: { screenshot?: boolean; maxChars?: number } = {}): Promise<PageResult> {
+export async function fetchPage(url: string, opts: { screenshot?: boolean; maxChars?: number; allowLocalHost?: string } = {}): Promise<PageResult> {
   if (!/^https?:\/\//i.test(url)) url = `https://${url}`
   const hit = cache.get(url)
   if (hit && Date.now() - hit.at < 5 * 60000) return hit.page
+  const local = opts.allowLocalHost?.toLowerCase()
+  if (local) localAllowed.set(local, (localAllowed.get(local) ?? 0) + 1)
+  const release = (): void => {
+    if (!local) return
+    const n = (localAllowed.get(local) ?? 1) - 1
+    if (n > 0) localAllowed.set(local, n)
+    else localAllowed.delete(local)
+  }
   const page = await withPage(url, async (win) => {
     const data = (await win.webContents.executeJavaScriptInIsolatedWorld(999, [
       {
@@ -132,7 +160,7 @@ export async function fetchPage(url: string, opts: { screenshot?: boolean; maxCh
       }
     }
     return { url: data.url, title: data.title, markdown, links: data.links, screenshot }
-  })
+  }).finally(release)
   page.markdown = truncate(page.markdown, opts.maxChars ?? 14000)
   cache.set(url, { at: Date.now(), page })
   if (cache.size > 40) cache.delete(cache.keys().next().value as string)

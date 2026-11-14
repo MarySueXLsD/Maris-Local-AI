@@ -1,4 +1,4 @@
-import { Check, Smartphone, Trash2, Wifi, X } from 'lucide-react'
+import { Check, Globe, Smartphone, Trash2, Wifi, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { renderSVG } from 'uqr'
 import type { LinkStatus } from '@shared/types'
@@ -31,6 +31,8 @@ export function PhoneLink() {
 
   if (!status) return null
   const left = pairing ? Math.max(0, Math.round((pairing.expiresAt - now) / 1000)) : 0
+  const relay = status.relay
+  const anywhere = relay?.state === 'online'
   const act = (p: Promise<LinkStatus>): void => {
     setError('')
     void p.then(setStatus).catch((e: Error) => setError(e.message.replace(/^Error invoking remote method '[^']+': (\w*Error: )?/, '')))
@@ -57,7 +59,11 @@ export function PhoneLink() {
               />
               <div className="min-w-[16rem] flex-1">
                 <ol className="list-decimal space-y-1.5 pl-5 text-[0.9rem] text-text-2">
-                  <li>Open Maris on your Android phone. It must be on the same Wi-Fi as this {DEVICE}.</li>
+                  <li>
+                    {anywhere
+                      ? `Open Maris on your Android phone. It can be on the same Wi-Fi as this ${DEVICE}, or anywhere with internet.`
+                      : `Open Maris on your Android phone. It must be on the same Wi-Fi as this ${DEVICE}.`}
+                  </li>
                   <li>
                     Tap <b className="text-text">Scan code</b> and point the camera here, or type the address and code below.
                   </li>
@@ -102,6 +108,18 @@ export function PhoneLink() {
               <Wifi size={13} aria-hidden /> If the phone cannot connect, allow Maris through this {DEVICE}’s firewall for private networks.
             </p>
           )}
+          {relay && (
+            <p className={`mt-1.5 flex items-center gap-1.5 text-[0.8rem] ${relay.state === 'unreachable' || !relay.url ? 'text-pollen' : 'text-text-3'}`} role="status">
+              <Globe size={13} aria-hidden />
+              {!relay.url
+                ? 'Connect from anywhere needs a relay address: Maris does not have its own relay yet. Enter one under Relay address above, or turn Connect from anywhere off.'
+                : relay.state === 'online'
+                  ? 'Connected to the relay: paired phones reach Maris from anywhere. The relay passes encrypted messages on and cannot read them.'
+                  : relay.state === 'unreachable'
+                    ? `Cannot reach the relay right now${relay.error ? ` (${relay.error})` : ''}. Maris keeps trying; on this network phones still connect directly.`
+                    : 'Connecting to the relay…'}
+            </p>
+          )}
         </div>
       </div>
 
@@ -116,7 +134,7 @@ export function PhoneLink() {
                   <Smartphone size={15} aria-hidden /> {d.name}
                   {d.online && (
                     <span className="inline-flex items-center gap-1 rounded-full bg-petal-soft px-2 py-0.5 text-[0.75rem] text-text">
-                      <Check size={11} aria-hidden /> Connected
+                      <Check size={11} aria-hidden /> {d.via === 'relay' ? 'Connected through the relay' : 'Connected'}
                     </span>
                   )}
                 </span>

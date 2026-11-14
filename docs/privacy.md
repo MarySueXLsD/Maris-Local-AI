@@ -33,6 +33,7 @@ Only for these things, and only when they happen:
 | API models | The service whose key you added (Anthropic, OpenAI, Google, OpenRouter, …) | When a chat is answered by one of that service's models, and when Maris reads its list of models (on adding it, on Refresh and once a day) |
 | List prices of API models | openrouter.ai (its public list of models and prices) | Once a day, only while a service on the internet is set up and Settings → Engine → "Look up list prices" is on. A plain download: no key, nothing about you or your chats |
 | Phone link | Your phone, on your own network only, encrypted | When you pair a phone and use it |
+| Phone link from anywhere | The Maris relay (a Cloudflare Worker, see [relay/README.md](../relay/README.md)), which passes the phone's messages on, end-to-end encrypted: it cannot read them, but sees when and how much is sent and from which addresses | Only while Settings → Phone → "Connect from anywhere" is on |
 
 What Maris sends in a web search is the search words for that question. Connectors send what a tool
 needs (for example the name of a repository); anything that changes something in a service waits for

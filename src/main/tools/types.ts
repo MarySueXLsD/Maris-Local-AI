@@ -13,6 +13,8 @@ export interface ToolContext {
   projectDir?: string
   /** Model currently answering (lets tools know about vision support). */
   modelSupportsVision: boolean
+  /** The service the answering model runs at, when it is on the internet (what a tool returns is sent there). */
+  away?: string
   progress: (text: string) => void
   setPreview: (dataUrl: string) => void
   addMedia: (m: MediaResult) => void

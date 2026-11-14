@@ -44,7 +44,8 @@ const TOOL_KIND: Record<string, ApprovalKind> = {
   open_target: 'programs',
   kill_process: 'programs',
   set_clipboard: 'clipboard',
-  forget: 'memory'
+  forget: 'memory',
+  remember: 'memory'
 }
 
 /**

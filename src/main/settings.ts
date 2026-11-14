@@ -1,5 +1,6 @@
 import type { DeepPartial, Settings } from '@shared/types'
-import { DEFAULT_SETTINGS, deepMerge } from '@shared/defaults'
+import { cleanPatch, DEFAULT_SETTINGS, deepMerge, getPath, patchFor, PROTECTED_ON_IMPORT, type NumberRanges } from '@shared/defaults'
+import { SETTINGS_SCHEMA } from '../renderer/src/views/settings/schema'
 import { repo } from './db'
 import { suggestDataDir } from './paths'
 import { Emitter } from './util'
@@ -8,6 +9,15 @@ export { DEFAULT_SETTINGS, deepMerge }
 
 /** Keys that describe this PC rather than preferences; kept when settings are reset or imported. */
 const MACHINE_KEYS = ['dataDir', 'tiers', 'onboarded'] as const
+
+let ranges: NumberRanges | undefined
+/** The limits the Settings page puts on number settings, which changes from anywhere else keep to as well. */
+function numberRanges(): NumberRanges {
+  ranges ??= new Map(
+    SETTINGS_SCHEMA.filter((d) => (d.type === 'number' || d.type === 'slider') && (d.min !== undefined || d.max !== undefined)).map((d) => [d.path, { min: d.min, max: d.max }])
+  )
+  return ranges
+}
 
 class SettingsService {
   private current: Settings = DEFAULT_SETTINGS
@@ -54,7 +64,8 @@ class SettingsService {
   }
 
   update(patch: DeepPartial<Settings>): Settings {
-    this.current = deepMerge(this.current, patch)
+    // Values of the wrong kind (from a broken backup, an older phone app, a model) are left out.
+    this.current = deepMerge(this.current, cleanPatch(patch, DEFAULT_SETTINGS, numberRanges()))
     repo.setKv('settings', this.current)
     this.changed.emit(this.current)
     return this.current
@@ -90,7 +101,10 @@ class SettingsService {
       throw new Error('This file is not a Maris settings backup.')
     }
     const keep = Object.fromEntries(MACHINE_KEYS.map((k) => [k, this.current[k]]))
-    return this.replace(deepMerge(deepMerge(structuredClone(DEFAULT_SETTINGS), parsed.settings), keep))
+    let next = deepMerge(deepMerge(structuredClone(DEFAULT_SETTINGS), cleanPatch(parsed.settings, DEFAULT_SETTINGS, numberRanges())), keep)
+    // Approval rules, full control, the phone link and the addresses Maris sends to stay as they are.
+    for (const p of PROTECTED_ON_IMPORT) next = deepMerge(next, patchFor(p, structuredClone(getPath(this.current, p))))
+    return this.replace(next)
   }
 }
 

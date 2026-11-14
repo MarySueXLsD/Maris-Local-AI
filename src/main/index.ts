@@ -51,6 +51,8 @@ protocol.registerSchemesAsPrivileged([
 
 let win: BrowserWindow | undefined
 let tray: Tray | undefined
+/** Sets how often the status bar's readings are taken (see whenReady); called when the window shows or hides. */
+let paceMonitor: (() => void) | undefined
 let trayHintShown = false
 let freeTimer: NodeJS.Timeout | undefined
 
@@ -311,6 +313,7 @@ function createWindow(): void {
     void requestQuit()
   })
   win.on('focus', () => win?.flashFrame(false))
+  for (const ev of ['show', 'hide', 'minimize', 'restore'] as const) win.on(ev as 'show', () => paceMonitor?.())
   if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   else void win.loadFile(path.join(__dirname, '../renderer/index.html'))
 }
@@ -470,20 +473,36 @@ if (!gotLock) {
         if (lastConnectors) connectors.startAll()
         else void connectors.stopAll()
       }
-      if (s.link.enabled !== lastLink.enabled || s.link.port !== lastLink.port) {
+      if (s.link.enabled !== lastLink.enabled || s.link.port !== lastLink.port || s.link.anywhere !== lastLink.anywhere || s.link.relayUrl !== lastLink.relayUrl) {
         lastLink = { ...s.link }
         link.apply()
       }
-      if (monitorMs(s) !== lastInterval) {
-        lastInterval = monitorMs(s)
-        monitor.restart(lastInterval)
-      }
+      paceMonitor?.()
     })
     let lastMaterial = cfg.ui.material
     let lastLink = { ...cfg.link }
     let lastUpdates = { ...cfg.updates }
     let lastConnectors = cfg.extensions.connectors
     let lastInterval = monitorMs(cfg)
+    // Readings are wanted while someone looks: with the window hidden or minimised, no phone connected and
+    // nothing running, they are taken every 15 seconds or more. (On laptops with two graphics chips, asking
+    // the NVIDIA one every second or two keeps it from going to sleep.)
+    paceMonitor = (): void => {
+      // Closing stops the monitor; hiding the window on the way out must not start it again.
+      if (isClosing()) return
+      const s = settings.get()
+      const looking =
+        Boolean(win && !win.isDestroyed() && win.isVisible() && !win.isMinimized()) ||
+        link.status().devices.some((d) => d.online) ||
+        agent.runningIds().length > 0 ||
+        media.activeCount > 0 ||
+        media.queuedCount > 0
+      const want = looking ? monitorMs(s) : Math.max(15000, monitorMs(s) * 5)
+      if (want === lastInterval) return
+      lastInterval = want
+      monitor.restart(want)
+    }
+    setInterval(() => paceMonitor?.(), 10000)
     nativeTheme.on('updated', () => {
       try {
         if (!IS_MAC) win?.setTitleBarOverlay(overlayColors())
@@ -511,6 +530,7 @@ if (!gotLock) {
   app.on('will-quit', () => {
     globalShortcut.unregisterAll()
     closeDb()
+    log.flush()
   })
   app.on('window-all-closed', () => {
     // macOS apps usually keep running in the Dock when their window closes.

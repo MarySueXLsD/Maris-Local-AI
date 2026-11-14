@@ -1,6 +1,11 @@
 import {
   Boxes,
+  Braces,
   Brain,
+  ChevronRight,
+  Copy,
+  Download,
+  FileText,
   LifeBuoy,
   Code2,
   FolderPlus,
@@ -25,6 +30,7 @@ import { Dialog, DropdownMenu } from 'radix-ui'
 import { useEffect, useMemo, useState } from 'react'
 import type { Conversation } from '@shared/types'
 import { api } from '../lib/api'
+import { exportChat } from '../lib/chatActions'
 import { relativeDay } from '../lib/format'
 import { useApp, type View } from '../store'
 import { MarisMark } from './MarisMark'
@@ -118,7 +124,7 @@ function ConversationRow({ c, active }: { c: Conversation; active: boolean }) {
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
           <button
-            title="Pin, rename or delete"
+            title="Pin, rename, export or delete"
             aria-label={`Options for ${c.title}`}
             className="absolute right-1 inline-flex size-6 items-center justify-center rounded-md text-text-3 opacity-0 group-hover:opacity-100 hover:bg-raised hover:text-text focus-visible:opacity-100 data-[state=open]:opacity-100"
           >
@@ -133,6 +139,27 @@ function ConversationRow({ c, active }: { c: Conversation; active: boolean }) {
             <DropdownMenu.Item className="menu-item" onSelect={() => setRenaming(true)}>
               <Pencil size={14} /> Rename
             </DropdownMenu.Item>
+            {REMOTE ? (
+              <DropdownMenu.Item className="menu-item" onSelect={() => void exportChat(c.id, 'md')}>
+                <Copy size={14} /> Copy as Markdown
+              </DropdownMenu.Item>
+            ) : (
+              <DropdownMenu.Sub>
+                <DropdownMenu.SubTrigger className="menu-item">
+                  <Download size={14} /> Export <ChevronRight size={13} className="ml-auto text-text-3" />
+                </DropdownMenu.SubTrigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.SubContent sideOffset={6} className="z-50 min-w-52 rounded-xl border border-line bg-raised p-1.5 shadow-float">
+                    <DropdownMenu.Item className="menu-item" onSelect={() => void exportChat(c.id, 'md')}>
+                      <FileText size={14} /> Markdown <span className="ml-auto text-[0.75rem] text-text-3">to read or share</span>
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item className="menu-item" onSelect={() => void exportChat(c.id, 'json')}>
+                      <Braces size={14} /> JSON <span className="ml-auto text-[0.75rem] text-text-3">everything</span>
+                    </DropdownMenu.Item>
+                  </DropdownMenu.SubContent>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Sub>
+            )}
             <DropdownMenu.Item className="menu-item text-danger" onSelect={() => (running ? setConfirm(true) : void api.conv.remove(c.id))}>
               <Trash2 size={14} /> Delete chat
             </DropdownMenu.Item>
@@ -275,10 +302,22 @@ export function Sidebar() {
             aria-label="Search chats"
             className="h-8 w-full rounded-lg border border-line bg-sunken pr-7 pl-8 text-[0.86rem] text-text placeholder:text-text-3 focus:border-petal focus:outline-none"
           />
-          {query && (
+          {query ? (
             <button aria-label="Clear search" className="absolute top-1/2 right-1.5 -translate-y-1/2 rounded p-0.5 text-text-3 hover:text-text" onClick={() => setQuery('')}>
               <X size={13} />
             </button>
+          ) : (
+            !TOUCH && (
+              <Tip label="Go anywhere: chats, settings, help and actions" side="right">
+                <button
+                  aria-label={`Go anywhere (${keys('K')})`}
+                  onClick={() => useApp.setState({ paletteOpen: true })}
+                  className="absolute top-1/2 right-1.5 -translate-y-1/2 rounded px-1 text-[0.7rem] text-text-3 hover:bg-raised hover:text-text"
+                >
+                  {keys('K')}
+                </button>
+              </Tip>
+            )
           )}
         </div>
       </div>

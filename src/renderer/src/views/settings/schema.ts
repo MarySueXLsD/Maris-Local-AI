@@ -86,7 +86,7 @@ export const SECTIONS: { id: SectionId; title: string; description: string }[] =
   { id: 'window', title: 'Window and startup', description: 'Tray, startup and the global shortcut.' },
   { id: 'updates', title: 'Updates and news', description: 'Checking for new versions, news posts, and the Admin page for publishing them.' },
   { id: 'extensions', title: 'Skills and connectors', description: 'Instructions from git and outside services Maris can use.' },
-  { id: 'phone', title: 'Phone', description: `Use Maris from your Android phone over your home Wi-Fi. Everything still runs on this ${DEVICE}.` },
+  { id: 'phone', title: 'Phone', description: `Use Maris from your Android phone, at home over Wi-Fi or from anywhere through a relay. Everything still runs on this ${DEVICE}.` },
   { id: 'data', title: 'Data and setup', description: 'Where models and creations live, backups of these settings, and the setup assistant.' }
 ]
 
@@ -244,6 +244,29 @@ export const SETTINGS_SCHEMA: SettingDef[] = [
   { path: 'engine.gpuReserveMB', section: 'engine', label: 'VRAM to leave free', hint: `For ${OS_NAME}, your browser and games.`, type: 'number', min: 0, max: 16384, step: 50, unit: 'MB', keywords: 'reserve memory' },
   { path: 'engine.firstTokenTimeoutSec', section: 'engine', label: 'Wait for a model to start answering', hint: 'Large models can take minutes to load the first time.', type: 'number', min: 30, max: 1800, step: 10, unit: 's', keywords: 'timeout' },
   { path: 'engine.idleTimeoutSec', section: 'engine', label: 'Give up when a model goes silent for', type: 'number', min: 30, max: 1800, step: 10, unit: 's', keywords: 'timeout stall' },
+  {
+    path: 'engine.kvCache',
+    section: 'engine',
+    label: 'Context window memory',
+    hint: 'How Ollama stores the conversation it is reading. Compact (q8) takes half the video memory of Full with practically the same answers, so bigger windows stay on the graphics card. Applies when Maris starts Ollama itself.',
+    type: 'segmented',
+    options: [
+      { value: 'f16', label: 'Full' },
+      { value: 'q8_0', label: 'Compact' },
+      { value: 'q4_0', label: 'Smallest' }
+    ],
+    keywords: 'kv cache quantization q8 q4 f16 vram context memory',
+    help: 'your-pc'
+  },
+  {
+    path: 'engine.flashAttention',
+    section: 'engine',
+    label: 'Flash attention',
+    hint: 'A faster way for models to read long conversations, with less memory. Compact and Smallest context memory need it. Applies when Maris starts Ollama itself; models that cannot use it simply do without.',
+    type: 'switch',
+    keywords: 'flash attention fa speed memory',
+    help: 'your-pc'
+  },
   { path: 'engine.stopOllamaOnQuit', section: 'engine', label: 'Stop Ollama when Maris closes', hint: 'Closing Maris always unloads its models, so no video memory stays in use. On: the Ollama server is stopped too (Maris starts it again next time). Off: Ollama keeps running for other programs.', type: 'switch', keywords: 'quit exit close vram video memory server background free' },
   { path: 'usage.track', section: 'engine', group: 'API models', label: 'Keep a record of API use', hint: `Counts the tokens each model at an API service uses and what that costs, per day. Shown on Models → API and under each answer. The record stays on this ${DEVICE}.`, type: 'switch', keywords: 'usage cost price tokens spend bill money claude gpt api', help: 'api-models' },
   { path: 'usage.priceLookup', section: 'engine', group: 'API models', label: 'Look up list prices', hint: 'Once a day, while a service on the internet is set up, Maris reads the makers’ current prices from the public list at openrouter.ai. Nothing about you, your key or your chats is sent. Off: Maris uses the prices it shipped with, the ones a service gives itself and the ones you set.', type: 'switch', keywords: 'price pricing cost list online openrouter update', help: 'api-models' },
@@ -350,6 +373,25 @@ export const SETTINGS_SCHEMA: SettingDef[] = [
   { path: 'link.enabled', section: 'phone', label: 'Allow the phone app to connect', hint: 'Only devices you pair with a one-time code can connect, and everything they send is encrypted.', type: 'switch', keywords: 'android mobile remote link wifi lan' },
   { path: 'link.allowApprovals', section: 'phone', label: 'Approve changes from the phone', hint: `Off: the phone shows what Maris wants to change, but you approve it at this ${DEVICE}.`, type: 'switch', keywords: 'approval remote' },
   { path: 'link.port', section: 'phone', label: 'Network port', hint: 'Change it only if another program already uses 7341.', type: 'number', min: 1024, max: 65535, step: 1, keywords: 'tcp firewall' },
+  {
+    path: 'link.anywhere',
+    section: 'phone',
+    label: 'Connect from anywhere',
+    hint: 'The phone reaches Maris on mobile data or another Wi-Fi too, through the Maris relay. Everything stays end-to-end encrypted: the relay passes messages on and cannot read them. At home the phone still connects directly.',
+    type: 'switch',
+    keywords: 'relay internet remote away mobile data outside home cellular 4g 5g',
+    help: 'phone'
+  },
+  {
+    path: 'link.relayUrl',
+    section: 'phone',
+    label: 'Relay address',
+    hint: 'Leave empty for the Maris relay. Only for a relay of your own (relay/README.md in the source code says how to run one).',
+    type: 'text',
+    placeholder: 'wss://maris-relay.example.workers.dev',
+    when: { path: 'link.anywhere', equals: true },
+    keywords: 'relay server url self-hosted cloudflare worker'
+  },
 
   // ------------------------------------------------------------- data
   { path: 'dataDir', section: 'data', label: 'Data folder', hint: 'Image and video models, the ComfyUI engine and your creations (20–80 GB).', type: 'folder', keywords: 'storage disk' }

@@ -97,9 +97,21 @@ function fromSchema(s) {
  *   tools    names of the tools offered (natively or described in text)
  *   images   a picture came with the conversation
  */
-function plan({ model, task, result, tools, images = false }) {
+function plan({ model, task, result, results = [], tools, images = false }) {
   const last = task ?? ''
   const all = last
+  // Two reads in one step (they run side by side in Maris).
+  const both = /Read both of these files: (.+?) \| (.+)/.exec(all)
+  if (both && tools.includes('read_file')) {
+    if (result === undefined) return { kind: 'tools', calls: [{ name: 'read_file', args: { path: both[1].trim() } }, { name: 'read_file', args: { path: both[2].trim() } }] }
+    return { kind: 'text', text: `Both say: ${results.map((r) => r.replace(/\s+/g, ' ').slice(0, 200)).join(' || ')}` }
+  }
+  // Two changes in one step: when the first is denied, the second must not run.
+  const two = /Write two files: (.+?) = (.+?) \| (.+?) = (.+)/.exec(all)
+  if (two && tools.includes('write_file')) {
+    if (result === undefined) return { kind: 'tools', calls: [{ name: 'write_file', args: { path: two[1].trim(), content: two[2].trim() } }, { name: 'write_file', args: { path: two[3].trim(), content: two[4].trim() } }] }
+    return { kind: 'text', text: `Results: ${results.map((r) => r.replace(/\s+/g, ' ').slice(0, 300)).join(' || ')}` }
+  }
   if (/REFUSE-TEST/.test(last)) return { kind: 'refuse' }
   if (/slow/.test(model) || /SLOW-TEST|Write a detailed essay/.test(last)) return { kind: 'slow' }
   if (/17 × 23/.test(last)) return { kind: 'text', text: '391' }
@@ -158,19 +170,27 @@ const RESULT_BLOCK = /<tool_result[^>]*>\n?([\s\S]*?)\n?<\/tool_result>/g
 function latest(msgs, textOf) {
   let task = ''
   let result
+  /** Every tool result since the person's latest message (a step with several calls has several). */
+  let results = []
   for (const m of msgs) {
-    if (m.role === 'tool') result = textOf(m.content)
-    else if (m.role === 'user') {
+    if (m.role === 'tool') {
+      result = textOf(m.content)
+      results.push(result)
+    } else if (m.role === 'user') {
       const t = textOf(m.content)
       const inner = [...t.matchAll(RESULT_BLOCK)].map((x) => x[1])
       const rest = t.replace(RESULT_BLOCK, '').trim()
       if (rest) {
         task = rest
         result = undefined
-      } else if (inner.length) result = inner[inner.length - 1]
+        results = []
+      } else if (inner.length) {
+        result = inner[inner.length - 1]
+        results.push(...inner)
+      }
     }
   }
-  return { task, result }
+  return { task, result, results }
 }
 
 export async function startMockLlm({ key = 'test-key', host = '127.0.0.1', port: wantPort = 0 } = {}) {
@@ -238,9 +258,9 @@ export async function startMockLlm({ key = 'test-key', host = '127.0.0.1', port:
     const userTexts = msgs.filter((m) => m.role === 'user').map((m) => oaText(m.content))
     // Tools described in text (for a model without tool calling): results come back inside user messages.
     const asText = !body.tools && /<tool_call>/.test(system + userTexts.join('\n'))
-    const { task, result } = latest(msgs, oaText)
+    const { task, result, results } = latest(msgs, oaText)
     const offered = body.tools ? body.tools.map((t) => t.function?.name) : asText ? [...(system + userTexts.join('\n')).matchAll(/^- ([\w.-]+)\(/gm)].map((m) => m[1]) : []
-    const step = body.response_format ? { kind: 'text', text: JSON.stringify(fromSchema(body.response_format.json_schema?.schema ?? { type: 'object', properties: { title: { type: 'string' } } })) } : plan({ model, task, result, tools: offered, images: msgs.some((m) => Array.isArray(m.content) && m.content.some((p) => p?.type === 'image_url')) })
+    const step = body.response_format ? { kind: 'text', text: JSON.stringify(fromSchema(body.response_format.json_schema?.schema ?? { type: 'object', properties: { title: { type: 'string' } } })) } : plan({ model, task, result, results, tools: offered, images: msgs.some((m) => Array.isArray(m.content) && m.content.some((p) => p?.type === 'image_url')) })
 
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
     let n = 0
@@ -305,6 +325,12 @@ export async function startMockLlm({ key = 'test-key', host = '127.0.0.1', port:
         chunk({ tool_calls: [{ index: 0, function: { arguments: args.slice(i, i + 9) } }] })
         await sleep(5)
       }
+      return end('tool_calls')
+    }
+    if (step.kind === 'tools') {
+      step.calls.forEach((c, index) =>
+        chunk({ tool_calls: [{ index, id: `call_mock_${requests.length}_${index}`, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.args) } }] })
+      )
       return end('tool_calls')
     }
     for (const w of words(step.text)) {
@@ -470,9 +496,9 @@ export async function startMockLlm({ key = 'test-key', host = '127.0.0.1', port:
     const system = msgs.filter((x) => x.role === 'system').map((x) => x.content).join('\n')
     const userTexts = msgs.filter((x) => x.role === 'user').map((x) => String(x.content ?? ''))
     const asText = !body.tools && /<tool_call>/.test(system)
-    const { task, result } = latest(msgs, (c) => String(c ?? ''))
+    const { task, result, results } = latest(msgs, (c) => String(c ?? ''))
     const offered = body.tools ? body.tools.map((t) => t.function?.name) : asText ? [...system.matchAll(/^- ([\w.-]+)\(/gm)].map((x) => x[1]) : []
-    const step = body.format ? { kind: 'text', text: JSON.stringify(body.format === 'json' ? { title: 'Mock' } : fromSchema(body.format)) } : plan({ model, task, result, tools: offered, images: msgs.some((x) => x.images?.length) })
+    const step = body.format ? { kind: 'text', text: JSON.stringify(body.format === 'json' ? { title: 'Mock' } : fromSchema(body.format)) } : plan({ model, task, result, results, tools: offered, images: msgs.some((x) => x.images?.length) })
 
     loaded.set(model, { num_ctx: body.options?.num_ctx ?? 4096 })
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
@@ -522,6 +548,10 @@ export async function startMockLlm({ key = 'test-key', host = '127.0.0.1', port:
     if (step.kind === 'tool') {
       if (step.say) line({ message: { role: 'assistant', content: step.say }, done: false })
       line({ message: { role: 'assistant', content: '', tool_calls: [{ function: { name: step.name, arguments: step.args } }] }, done: false })
+      return done()
+    }
+    if (step.kind === 'tools') {
+      line({ message: { role: 'assistant', content: '', tool_calls: step.calls.map((c) => ({ function: { name: c.name, arguments: c.args } })) }, done: false })
       return done()
     }
     for (const w of words(step.text)) {

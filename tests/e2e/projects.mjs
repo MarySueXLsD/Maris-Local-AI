@@ -105,7 +105,7 @@ try {
   await d.send(`Create a text file at ${outside} containing exactly this text: not in the project`)
   await panel.waitFor({ timeout: 30000 })
   t.check(!existsSync(outside), 'a file outside the project still waits for approval')
-  await panel.getByRole('button', { name: 'Deny' }).click()
+  await panel.getByRole('button', { name: 'Deny', exact: true }).click()
   await d.waitDone()
   t.check(!existsSync(outside) && /did not approve/.test(await d.lastAnswer()), 'denying leaves nothing behind and the model is told')
 

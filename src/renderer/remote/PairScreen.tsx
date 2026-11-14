@@ -16,11 +16,11 @@ export function PairScreen({ onPaired }: { onPaired: (p: Pairing) => void }) {
   const [error, setError] = useState('')
   const [scanner, setScanner] = useState(false)
 
-  const connect = async (hosts: string[], port: number, c: string): Promise<void> => {
+  const connect = async (hosts: string[], port: number, c: string, relay?: { url: string; room: string }): Promise<void> => {
     setBusy(true)
     setError('')
     try {
-      const p = await pair({ hosts, port, code: c, name: name.trim() || 'Android phone' })
+      const p = await pair({ hosts, port, code: c, name: name.trim() || 'Android phone', relay })
       savePairing(p)
       onPaired(p)
     } catch (e) {
@@ -33,9 +33,10 @@ export function PairScreen({ onPaired }: { onPaired: (p: Pairing) => void }) {
   const fromLink = (url: string | undefined): void => {
     const p = url ? parsePairLink(url) : undefined
     if (!p) return
-    setAddress(`${p.hosts[0]}:${p.port}`)
+    if (p.hosts[0]) setAddress(`${p.hosts[0]}:${p.port}`)
     setCode(p.code)
-    void connect(p.hosts, p.port, p.code)
+    // A code with the relay in it pairs from anywhere: through the relay when the computer is not on this network.
+    void connect(p.hosts, p.port, p.code, p.relay)
   }
 
   useEffect(() => {

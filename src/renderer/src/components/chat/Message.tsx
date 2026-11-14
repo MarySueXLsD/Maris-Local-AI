@@ -1,11 +1,40 @@
-import { Check, ChevronRight, Clapperboard, Cloud, Copy, Cpu, FileCode2, FileText, FolderOpen, Gauge, Image as ImageIcon, ImagePlay, Mountain, Pencil, RefreshCw, Sparkles, ThumbsDown, ThumbsUp, Zap } from 'lucide-react'
-import { DropdownMenu, Popover } from 'radix-ui'
-import { memo, useEffect, useRef, useState } from 'react'
+import {
+  Ban,
+  Check,
+  ChevronRight,
+  Clapperboard,
+  Cloud,
+  Copy,
+  Cpu,
+  FileCode2,
+  FileText,
+  FolderOpen,
+  FolderX,
+  Gauge,
+  GitBranch,
+  Image as ImageIcon,
+  ImagePlay,
+  Mountain,
+  Pencil,
+  RefreshCw,
+  RotateCcw,
+  Sparkles,
+  ThumbsDown,
+  ThumbsUp,
+  Trash2,
+  Undo2,
+  X,
+  Zap
+} from 'lucide-react'
+import { Dialog, DropdownMenu, Popover } from 'radix-ui'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { answerPlan, canUndo, type UndoResult, type UndoStep } from '@shared/chatExport'
 import { usd } from '@shared/pricing'
 import type { ApprovalRequest, ChatMessage, MediaResult, MessageActivity, MessageStats, Part, RouteDecision, Tier, ToolCallRecord } from '@shared/types'
 import { api } from '../../lib/api'
-import { REMOTE } from '../../lib/platform'
-import { useMediaSrc } from '../Media'
+import { branchFrom, errorText } from '../../lib/chatActions'
+import { REMOTE, TRASH } from '../../lib/platform'
+import { MediaImg, useMediaSrc } from '../Media'
 import { duration, prettyModel } from '../../lib/format'
 import { useApp } from '../../store'
 import { Markdown } from '../Markdown'
@@ -145,6 +174,8 @@ function UserBubble({ m }: { m: ChatMessage }) {
           {m.attachments.map((a) =>
             a.kind === 'image' && a.dataUrl ? (
               <img key={a.id} src={a.dataUrl} alt={a.name} className="max-h-48 rounded-xl border border-line" />
+            ) : a.kind === 'image' && a.stored ? (
+              <MediaImg key={a.id} path={a.stored} alt={a.name} className="max-h-48 rounded-xl border border-line" />
             ) : a.kind === 'snippet' ? (
               <details key={a.id} className="max-w-full rounded-lg border border-line bg-surface text-[0.82rem] text-text-2">
                 <summary className="flex items-center gap-1.5 px-2.5 py-1" title={a.path}>
@@ -219,6 +250,116 @@ function CopyButton({ text }: { text: string }) {
     >
       {ok ? <Check size={14} /> : <Copy size={14} />}
     </IconButton>
+  )
+}
+
+const STEP_ICON: Record<UndoStep['action'], typeof Undo2> = { restore: RotateCcw, remove: Trash2, 'remove-folder': FolderX, 'move-back': Undo2, none: Ban }
+const fileName = (p: string): string => p.split(/[\\/]/).filter(Boolean).pop() ?? p
+
+/** One line of the undo list: the file, and what happens to it (or what happened). */
+function UndoRow({ step, result }: { step: UndoStep; result?: UndoResult }) {
+  const Icon = result ? (result.ok ? Check : X) : STEP_ICON[step.action]
+  const tone = result ? (result.ok ? 'text-ok' : 'text-danger') : step.action === 'none' ? 'text-text-3' : 'text-petal'
+  return (
+    <li className="flex items-start gap-2.5 rounded-lg bg-sunken px-3 py-2">
+      <Icon size={15} className={cn('mt-0.5 shrink-0', tone)} aria-hidden />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[0.88rem] text-text" title={step.path}>
+          {fileName(step.path)}
+        </p>
+        {step.path !== fileName(step.path) && (
+          <p className="selectable truncate text-[0.76rem] text-text-3" title={step.path}>
+            {step.path}
+          </p>
+        )}
+        <p className={cn('text-[0.8rem]', result && !result.ok ? 'text-danger' : 'text-text-2')}>
+          {result ? (result.ok ? 'Done.' : result.error) : step.why}
+        </p>
+      </div>
+    </li>
+  )
+}
+
+/**
+ * "Undo changes": the files this answer changed go back to how they were, after the person sees the list.
+ * Stays mounted after the button goes (the answer is marked undone), so the dialog can show what happened.
+ */
+function UndoChanges({ m, available }: { m: ChatMessage; available: boolean }) {
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [results, setResults] = useState<UndoResult[]>()
+  const steps = useMemo(() => (open ? answerPlan(m.parts, TRASH) : []), [open, m.parts])
+  const doable = steps.filter((s) => s.action !== 'none').length
+  const run = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      setResults(await api.chat.undoAnswer(m.id))
+    } catch (e) {
+      setOpen(false)
+      useApp.setState({ error: `Could not undo: ${errorText(e)}` })
+    } finally {
+      setBusy(false)
+    }
+  }
+  const failed = results?.filter((r) => !r.ok && r.step.action !== 'none').length ?? 0
+  const undone = results?.filter((r) => r.ok).length ?? 0
+  if (!available && !open) return null
+  return (
+    <>
+      {available && (
+        <IconButton
+          label="Undo changes"
+          onClick={() => {
+            setResults(undefined)
+            setOpen(true)
+          }}
+        >
+          <Undo2 size={14} />
+        </IconButton>
+      )}
+      {open && (
+        <Dialog.Root open onOpenChange={(o) => !o && !busy && setOpen(false)}>
+          <Dialog.Portal>
+            <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40" />
+            <Dialog.Content className="fixed top-1/2 left-1/2 z-50 flex max-h-[85vh] w-[min(560px,94vw)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border border-line bg-raised p-6 shadow-float">
+              <Dialog.Title className="text-[1.1rem] font-semibold text-text">
+                {!results ? 'Undo the changes from this answer?' : !failed ? 'Changes undone' : undone ? 'Some changes could not be undone' : 'The changes could not be undone'}
+              </Dialog.Title>
+              <Dialog.Description className="mt-2 text-[0.9rem] text-text-2">
+                {!results
+                  ? `${doable} change${doable === 1 ? '' : 's'} will be undone, newest first. If these files changed after this answer (by you or a later answer), those later changes go too. The versions replaced now are kept as backups, and Maris is told what was undone.`
+                  : !failed
+                    ? 'Everything on the list went back. Maris is told, so later answers know.'
+                    : undone
+                      ? 'The rest went back. Maris is told what was undone and what was not.'
+                      : 'Nothing was changed. The reasons are below.'}
+              </Dialog.Description>
+              <ul className="mt-4 min-h-0 flex-1 space-y-1.5 overflow-y-auto" aria-label="Changes">
+                {results ? results.map((r, i) => <UndoRow key={i} step={r.step} result={r.step.action === 'none' ? undefined : r} />) : steps.map((s, i) => <UndoRow key={i} step={s} />)}
+              </ul>
+              <div className="mt-5 flex justify-end gap-2">
+                {results ? (
+                  <Dialog.Close asChild>
+                    <Button variant="primary">Close</Button>
+                  </Dialog.Close>
+                ) : (
+                  <>
+                    <Dialog.Close asChild>
+                      <Button variant="ghost" disabled={busy}>
+                        Keep the changes
+                      </Button>
+                    </Dialog.Close>
+                    <Button variant="primary" disabled={busy || !doable} onClick={() => void run()}>
+                      {busy ? <Spinner className="size-3.5" /> : <Undo2 size={14} />} {busy ? 'Undoing…' : 'Undo changes'}
+                    </Button>
+                  </>
+                )}
+              </div>
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
+      )}
+    </>
   )
 }
 
@@ -432,6 +573,8 @@ function AssistantMessage({ m, approvals }: { m: ChatMessage; approvals: Approva
   const text = m.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n\n')
   const empty = m.parts.length === 0
   const calls = m.parts.flatMap((p) => (p.type === 'tool' ? [p.call] : []))
+  const running = useApp((s) => Boolean(s.running[m.conversationId]))
+  const undoable = useMemo(() => !live && canUndo(m.parts), [live, m.parts])
   // Maris asked for full control of the PC: the card with the button shows however steps are grouped.
   const fullAsk = [...calls].reverse().find((c) => c.name === 'request_full_control' && c.status === 'done')
   const isLast = useApp((s) => {
@@ -454,6 +597,12 @@ function AssistantMessage({ m, approvals }: { m: ChatMessage; approvals: Approva
     if (p.type === 'media') return <MediaCard key={i} media={p.media} />
     return (
       <p key={i} className={cn('rounded-lg px-3 py-2 text-[0.86rem]', p.tone === 'warn' ? 'bg-pollen-soft text-text' : 'bg-sunken text-text-2')}>
+        {p.kind === 'undo' && (
+          <>
+            <Undo2 size={13} className="mr-1.5 inline-block align-[-2px] text-petal" aria-hidden />
+            <strong className="font-medium text-text">You undid these changes.</strong>{' '}
+          </>
+        )}
         {p.text}
         {p.conversationId && (
           <>
@@ -528,6 +677,10 @@ function AssistantMessage({ m, approvals }: { m: ChatMessage; approvals: Approva
             <span className="ml-auto flex items-center gap-0.5">
               {text && <CopyButton text={text} />}
               <RegenerateMenu m={m} />
+              <UndoChanges m={m} available={!running && undoable} />
+              <IconButton label="Branch from here: a new chat with the messages up to this answer" onClick={() => void branchFrom(m.id)}>
+                <GitBranch size={14} />
+              </IconButton>
               <Feedback m={m} />
             </span>
           </>

@@ -6,7 +6,28 @@ import { formatBytes } from '../util'
 import { resolvePath } from './paths'
 import { IS_MAC, IS_WIN, OS_LABEL, osDescription } from '../platform'
 import { runPowerShell, runShell } from './shell'
-import { num, schema, str, ToolError, type ToolDef } from './types'
+import { num, schema, str, ToolError, type PreparedCall, type ToolContext, type ToolDef } from './types'
+
+/** Chats in which the person already let a screenshot or the clipboard go to the cloud service (until Maris closes). */
+const sharedWithService = new Set<string>()
+
+/**
+ * Reading the screen or the clipboard is free while the model runs on this computer. When it runs at a
+ * service on the internet, what the tool returns is sent there, and a screen or a clipboard can hold
+ * anything (a password just copied, a bank page): Maris asks once per chat.
+ */
+function privateRead(ctx: ToolContext, tool: string, what: string): PreparedCall | undefined {
+  if (!ctx.away || sharedWithService.has(`${ctx.conversationId}:${tool}`)) return undefined
+  return {
+    risk: 'change',
+    title: `Send ${what} to ${ctx.away}`,
+    detail: `This chat is answered by a model at ${ctx.away}, so ${what} would be sent there. Maris asks once per chat.`
+  }
+}
+
+const sharedOnce = (ctx: ToolContext, tool: string): void => {
+  if (ctx.away) sharedWithService.add(`${ctx.conversationId}:${tool}`)
+}
 
 async function psJson<T>(script: string): Promise<T | undefined> {
   const r = await runPowerShell(`${script} | ConvertTo-Json -Depth 3 -Compress`, { timeoutMs: 30000 })
@@ -178,10 +199,11 @@ export const systemTools: ToolDef[] = [
     risk: 'read',
     description: 'Read the text currently on the user clipboard.',
     parameters: schema({}),
-    async prepare() {
-      return { risk: 'read', title: 'Read clipboard' }
+    async prepare(_args, ctx) {
+      return privateRead(ctx, 'get_clipboard', 'what is on the clipboard') ?? { risk: 'read', title: 'Read clipboard' }
     },
-    async run() {
+    async run(_args, ctx) {
+      sharedOnce(ctx, 'get_clipboard')
       const t = await clipboard.readText()
       return t ? t.slice(0, 20000) : '(clipboard has no text)'
     }
@@ -206,10 +228,11 @@ export const systemTools: ToolDef[] = [
     description:
       'Capture the user screen so you can see what is on it (requires a vision-capable model). Use when the user asks about something on their screen.',
     parameters: schema({}),
-    async prepare() {
-      return { risk: 'read', title: 'Take a screenshot' }
+    async prepare(_args, ctx) {
+      return privateRead(ctx, 'take_screenshot', 'a picture of your screen') ?? { risk: 'read', title: 'Take a screenshot' }
     },
     async run(_args, ctx) {
+      sharedOnce(ctx, 'take_screenshot')
       const d = screen.getPrimaryDisplay()
       const scale = Math.min(1, 1600 / (d.size.width * d.scaleFactor))
       const sources = await desktopCapturer.getSources({

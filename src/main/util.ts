@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from 'node:fs'
-import { rm } from 'node:fs/promises'
+import { appendFile, rename, rm, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 export const uid = (): string => randomUUID()
@@ -55,6 +55,29 @@ export function formatBytes(bytes: number): string {
 type Level = 'debug' | 'info' | 'warn' | 'error'
 const ring: string[] = []
 let logFile: string | undefined
+/** Lines waiting for the file: written together a moment later, without holding up the main thread. */
+let waiting: string[] = []
+let flushTimer: NodeJS.Timeout | undefined
+let writing = false
+const LOG_MAX = 5 * 2 ** 20
+
+async function writeWaiting(): Promise<void> {
+  flushTimer = undefined
+  if (writing || !logFile || !waiting.length) return
+  writing = true
+  const text = `${waiting.join('\n')}\n`
+  waiting = []
+  try {
+    // A long session keeps the file at about 5 MB: the older part moves to maris.log.1.
+    if (((await stat(logFile).catch(() => undefined))?.size ?? 0) > LOG_MAX) await rename(logFile, `${logFile}.1`).catch(() => undefined)
+    await appendFile(logFile, text)
+  } catch {
+    /* the log is best effort */
+  } finally {
+    writing = false
+    if (waiting.length) flushTimer ??= setTimeout(() => void writeWaiting(), 250)
+  }
+}
 
 export const log = {
   /**
@@ -79,10 +102,13 @@ export const log = {
     ring.push(line)
     if (ring.length > 500) ring.shift()
     if (logFile) {
-      try {
-        appendFileSync(logFile, line + '\n')
-      } catch {
-        /* ignore */
+      if (level === 'warn' || level === 'error') {
+        // Warnings and errors are written at once (after what was waiting), in case Maris stops right after.
+        waiting.push(line)
+        log.flush()
+      } else {
+        waiting.push(line)
+        flushTimer ??= setTimeout(() => void writeWaiting(), 250)
       }
     }
     if (!log.toConsole) return
@@ -94,8 +120,22 @@ export const log = {
   info: (scope: string, ...a: unknown[]) => log.write('info', scope, ...a),
   warn: (scope: string, ...a: unknown[]) => log.write('warn', scope, ...a),
   error: (scope: string, ...a: unknown[]) => log.write('error', scope, ...a),
-  recent: (): string[] => [...ring]
+  recent: (): string[] => [...ring],
+  /** Write what is waiting now, synchronously (on quitting, and with a warning or an error). */
+  flush(): void {
+    if (!logFile || !waiting.length) return
+    clearTimeout(flushTimer)
+    flushTimer = undefined
+    const text = `${waiting.join('\n')}\n`
+    waiting = []
+    try {
+      appendFileSync(logFile, text)
+    } catch {
+      /* ignore */
+    }
+  }
 }
+process.once('exit', () => log.flush())
 
 /** Simple typed event emitter used by main-process services. */
 export class Emitter<T> {

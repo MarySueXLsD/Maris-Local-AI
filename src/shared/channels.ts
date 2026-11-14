@@ -14,6 +14,7 @@ export const API_CHANNELS = {
     compact: 'chat:compact',
     previewRoute: 'chat:previewRoute',
     context: 'chat:context',
+    undoAnswer: 'chat:undoAnswer',
     onEvent: 'chat:event'
   },
   approvals: {
@@ -30,7 +31,9 @@ export const API_CHANNELS = {
     setModel: 'conv:setModel',
     remove: 'conv:delete',
     search: 'conv:search',
-    running: 'conv:running'
+    running: 'conv:running',
+    exportChat: 'conv:export',
+    branch: 'conv:branch'
   },
   models: {
     list: 'models:list',
@@ -131,7 +134,8 @@ export const API_CHANNELS = {
     pick: 'files:pick',
     pickImage: 'files:pickImage',
     attach: 'files:attach',
-    saveImage: 'files:saveImage'
+    saveImage: 'files:saveImage',
+    saveText: 'files:saveText'
   },
   shell: {
     openPath: 'shell:openPath',

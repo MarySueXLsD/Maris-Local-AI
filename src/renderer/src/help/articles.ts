@@ -54,8 +54,8 @@ Lost? Press **F1** any time to open this help.`
     id: 'chatting',
     title: 'Chatting with Maris',
     category: 'Getting started',
-    summary: 'Writing messages, attaching files, thinking, web access, and fixing answers.',
-    keywords: 'message send attach file image paste think web regenerate edit copy feedback thumbs',
+    summary: 'Writing messages, attaching files, thinking, web access, fixing answers, branching and exporting chats.',
+    keywords: 'message send attach file image paste think web regenerate edit copy feedback thumbs branch fork export save markdown json undo go anywhere ctrl+k',
     body: `## Sending messages
 
 Type in the box at the bottom and press **Enter**. **Shift+Enter** starts a new line. (You can switch to ${keys('Enter')} in Settings → Assistant.)
@@ -87,9 +87,19 @@ Point at an answer to see its buttons:
 
 - **Copy** the text.
 - **Try again** (the circular arrows): ask again, ask with more thinking, or ask a different model.
+- **Undo changes** (the curved arrow, only on answers that changed files): puts those files back the way they were. You see the list first. See [Maris asks before changing anything](help:approvals).
+- **Branch from here** (the forking line): a new chat with the messages up to this answer, to try another direction while this chat stays as it is.
 - **Thumbs up / down**: tell Maris what worked. With thumbs down you can write what to do differently, and Maris remembers it.
 
-Point at your own message and click the **pencil** to edit and resend it.`
+Point at your own message and click the **pencil** to edit and resend it.
+
+## Keeping and sharing a chat
+
+Point at a chat in the sidebar, click **…** and choose **Export**: **Markdown** is a tidy text file to read or share, **JSON** keeps everything (for a backup or other programs). In the phone app the menu has **Copy as Markdown** instead.
+
+## Going anywhere
+
+Press **${keys('K')}** (or click **${keys('K')}** in the sidebar's search box) and type: chat titles, settings (“dark”, “timeout”), help articles and words from old messages show up as you type, along with actions such as a new chat or exporting this one. **Enter** opens the one that is highlighted.`
   },
   {
     id: 'approvals',
@@ -107,12 +117,13 @@ Point at your own message and click the **pencil** to edit and resend it.`
 - Copying text to your clipboard, forgetting memories
 - Actions in services you connected, such as creating an issue on GitHub (see [Connectors](help:connectors))
 
-When Maris wants to do one of these, a yellow box appears with **Approve** and **Deny**. Nothing happens until you choose. If you deny, Maris stops and asks what you would prefer. When the change installs software, the box also says how much it downloads and how much disk space it needs.
+When Maris wants to do one of these, a yellow box appears with **Approve** and **Deny**. Nothing happens until you choose. If you deny, Maris stops and asks what you would prefer. **Deny and say why** lets you write what to do instead (“put it in the notes folder”), and Maris goes on from there. When Maris planned several changes at once, the ones after a denied change are not run. When the change installs software, the box also says how much it downloads and how much disk space it needs.
 
 ## Safety nets
 
 - Deleted files go to the **${TRASH}**.
 - Edited files are **backed up** first. In Code mode the **Changes** tab can undo any edit with one click.
+- **Undo changes** under an answer puts back everything that answer did to files: edited files return to their backup, new files and copies go to the ${TRASH}, moved things move back. You see the list first, the versions it replaces are backed up too, and Maris is told, so later answers know. Commands it ran and actions in other programs cannot be undone this way.
 
 ## Fewer questions (optional)
 
@@ -465,7 +476,7 @@ If Maris is not running, the command starts it in the background first.`
     title: 'Maris on your phone',
     category: 'Using Maris',
     summary: `The Android app: pairing it with this ${DEVICE}, what it can do, and how the link is protected.`,
-    keywords: 'phone android mobile app link pair pairing qr code wifi remote tablet apk tailscale vpn firewall',
+    keywords: 'phone android mobile app link pair pairing qr code wifi remote tablet apk tailscale vpn firewall anywhere away relay cellular internet outside',
     body: `The **Android app** shows this Maris on your phone: the same chats, Code mode, approvals, pictures and settings. Everything still runs on this ${DEVICE}; the phone is a window onto it, so the ${DEVICE} has to be on with Maris open.
 
 ## Getting the app
@@ -476,23 +487,30 @@ Download **Maris-Link-…-Android.apk** from the same releases page the installe
 
 1. On this ${DEVICE}, open **Settings → Phone** and turn on **Allow the phone app to connect**.
 2. Press **Pair a phone**. A QR code, an address and a one-time code appear.
-3. Open Maris on the phone, tap **Scan code** and point the camera at the QR code, or type the address and the code. The phone must be on the same Wi-Fi as this ${DEVICE}.
+3. Open Maris on the phone, tap **Scan code** and point the camera at the QR code, or type the address and the code. Without **Connect from anywhere**, the phone must be on the same Wi-Fi as this ${DEVICE}.
 
 Paired phones are listed under **Paired phones**; **Remove** next to one means it can no longer connect.
 
+## Away from home
+
+Turn on **Connect from anywhere** in Settings → Phone, and the phone reaches this ${DEVICE} on mobile data or any other Wi-Fi too, through the **Maris relay**. Nothing has to be set up on your router. At home the phone still connects directly; away it goes through the relay, and it switches back by itself.
+
+Everything stays end-to-end encrypted with the key the phone and this ${DEVICE} agreed on when you paired them: the relay passes messages on and cannot read them. It does see that this ${DEVICE} and the phone are connected, when, and how much they send. Phones paired before you turned it on learn the way the next time they connect at home; a new phone can also pair from anywhere by scanning the code.
+
 ## What the phone may do
 
-The phone can chat, work in Code mode, make pictures and change most settings. It cannot install updates, run the setup assistant or change the link itself. With **Approve changes from the phone** off, the phone shows what Maris wants to change, but you [approve](help:approvals) it at this ${DEVICE}.
+The phone can chat, work in Code mode, make pictures and change most settings. It cannot install updates, run the setup assistant, open folders or programs on this ${DEVICE}, change the link itself or the addresses Maris sends chats to. With **Approve changes from the phone** off, the phone shows what Maris wants to change, but you [approve](help:approvals) it at this ${DEVICE}, and the phone cannot install models, add connectors or turn on automatic approvals or full control either.
 
 ## How it is protected
 
-The link is **off until you turn it on** and only accepts devices on your own network (or a VPN such as Tailscale, to reach home from elsewhere). Pairing uses a one-time code, and everything between the phone and this ${DEVICE} is encrypted. Nothing goes through a server of Maris: there is none.
+The link is **off until you turn it on**. At home it only accepts devices on your own network (or a VPN such as Tailscale); away from home only through the relay. Pairing uses a one-time code that never travels over the network, and everything between the phone and this ${DEVICE} is encrypted, so neither the network nor the relay can read or change it.
 
 ## If the phone cannot connect
 
-- Check that both are on the same Wi-Fi, and not on a guest network that keeps devices apart.
+- At home: check that both are on the same Wi-Fi, and not on a guest network that keeps devices apart.
 - Allow Maris through this ${DEVICE}’s firewall for private networks.
-- Another program may already use the port: change **Network port** in Settings → Phone and pair again.`
+- Another program may already use the port: change **Network port** in Settings → Phone and pair again.
+- Away from home: check that **Connect from anywhere** is on and Settings → Phone says Maris is connected to the relay.`
   },
   {
     id: 'skills',
@@ -553,7 +571,7 @@ Keys and tokens are stored encrypted on your ${DEVICE}. When Maris uses a connec
     title: `Your ${DEVICE} explained: GPU, VRAM, RAM and CPU`,
     category: `Your ${DEVICE} and models`,
     summary: `What the parts of your ${DEVICE} do for AI, in plain words.`,
-    keywords: 'gpu vram ram cpu graphics card memory processor hardware nvidia amd intel ollama',
+    keywords: 'gpu vram ram cpu graphics card memory processor hardware nvidia amd intel ollama kv cache flash attention context memory compact',
     body: `AI models need two things: **memory** to hold them and **chips** to run them.
 
 | Part | What it does for Maris |
@@ -568,6 +586,10 @@ Keys and tokens are stored encrypted on your ${DEVICE}. When Maris uses a connec
 - A model that fits **completely in VRAM** answers fast.
 - If it is a bit too big, part of it runs from **RAM**: it still works, more slowly.
 - Without a supported graphics card, everything runs on the **CPU**. Small models and “mixture of experts” models still feel quick.
+
+## The conversation needs VRAM too
+
+Besides the model itself, the graphics card holds what the model is reading: the conversation, files and results. The longer the [context window](help:context), the more VRAM that takes. Settings → Engine → **Context window memory** stores it more compactly: *Compact* (the default) takes half the space of *Full* with practically the same answers, *Smallest* a quarter, with a little loss. Together with **Flash attention** this keeps bigger windows on the graphics card, so long chats stay fast.
 
 ## The engines
 
@@ -819,11 +841,12 @@ Pick a card under **Colour theme**:
     title: 'Keyboard shortcuts',
     category: 'Settings',
     summary: 'Every shortcut in one place.',
-    keywords: 'keyboard shortcuts hotkey keys ctrl enter escape f1',
+    keywords: 'keyboard shortcuts hotkey keys ctrl enter escape f1 command palette go anywhere search ctrl+k',
     body: `| Keys | What it does |
 | --- | --- |
 | **Enter** | Send (Shift+Enter for a new line) |
 | **Esc** | Stop the answer |
+| **${keys('K')}** | Go anywhere: chats, settings, help articles, words in old messages and common actions |
 | **${keys('N')}** | New chat (new task in Code mode) |
 | **${keys(',')}** | Settings |
 | **${keys('B')}** | Show or hide the sidebar |

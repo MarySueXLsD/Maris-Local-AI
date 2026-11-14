@@ -32,6 +32,7 @@ class SystemMonitor {
   private extCpu = 0
   private lastMediaAt = 0
   private ollamaVersion?: string
+  private versionAt = 0
   /** Whether Ollama is on this computer at all, looked at now and then (a file check). */
   private ollamaInstalled?: { at: number; yes: boolean }
   private comfyProbe: () => Promise<ComfyProbe> = async () => ({
@@ -343,7 +344,11 @@ class SystemMonitor {
 
   private async sample(): Promise<SystemStatus> {
     const [loaded, comfy] = await Promise.all([ollama.ps(), this.comfyProbe().catch(() => undefined)])
-    if (!this.ollamaVersion || loaded.length === 0) this.ollamaVersion = await ollama.version()
+    // Whether Ollama is up: asked again now and then while no model is loaded, not at every reading.
+    if (!this.ollamaVersion || (loaded.length === 0 && Date.now() - this.versionAt > 10000)) {
+      this.ollamaVersion = await ollama.version()
+      this.versionAt = Date.now()
+    }
     const up = Boolean(this.ollamaVersion)
     if (!this.ollamaInstalled || Date.now() - this.ollamaInstalled.at > 30000) this.ollamaInstalled = { at: Date.now(), yes: up || ollama.isInstalled() }
     const cpu = this.cpuLoad()

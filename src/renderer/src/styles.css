@@ -447,8 +447,9 @@ select option {
 [data-glow] :focus-visible {
   box-shadow: 0 0 14px color-mix(in srgb, var(--petal) 65%, transparent);
 }
-/* The message box shows focus with its own border; no inner ring. */
-textarea[aria-label='Message Maris']:focus-visible {
+/* The message box and the Ctrl+K box show focus with their own border; no inner ring. */
+textarea[aria-label='Message Maris']:focus-visible,
+input[aria-label='Go anywhere']:focus-visible {
   outline: none;
   box-shadow: none;
 }
@@ -509,6 +510,12 @@ textarea[aria-label='Message Maris']:focus-visible {
 }
 .hljs-deletion {
   color: var(--danger);
+}
+
+/* Older chat messages: not laid out or painted while out of view; their last height is remembered. */
+.offscreen-lazy {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 220px;
 }
 
 /* streaming caret, placed at the end of the last block */

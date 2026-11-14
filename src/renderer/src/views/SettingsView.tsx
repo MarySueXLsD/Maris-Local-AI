@@ -449,12 +449,14 @@ export function SettingsView() {
   const wanted = useApp((st) => st.settingsSection)
   const known = (id?: string): SectionId | undefined => SECTIONS.find((x) => x.id === id)?.id
   const [section, setSection] = useState<SectionId>(known(wanted?.id) ?? 'appearance')
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(wanted?.query ?? '')
   useEffect(() => {
     const id = known(wanted?.id)
     if (!id) return
     setSection(id)
-    setQuery('')
+    setQuery(wanted?.query ?? '')
+    // Used once: opening Settings later starts as usual, not on this section or search.
+    useApp.setState({ settingsSection: undefined })
   }, [wanted])
   const [genRole, setGenRole] = useState<'fast' | 'balanced' | 'max' | 'code'>('max')
   const [packs, setPacks] = useState<PackInfo[]>([])
@@ -705,7 +707,10 @@ function DataActions({
               <Download size={14} /> Export
             </Button>
           </ActionRow>
-          <ActionRow title="Import settings" hint={`Load preferences from a file. Models and folders chosen for this ${DEVICE} are kept.`}>
+          <ActionRow
+            title="Import settings"
+            hint={`Load preferences from a file. Models and folders chosen for this ${DEVICE} are kept, and so are what Maris may do without asking, full control, the phone link and the addresses Maris sends chats to: a file cannot change those.`}
+          >
             <Button
               variant="outline"
               size="sm"

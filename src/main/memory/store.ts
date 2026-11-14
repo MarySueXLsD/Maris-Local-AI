@@ -117,7 +117,7 @@ class MemoryStore {
     repo.insertMemory(m, emb, emb ? model : undefined)
     this.items.unshift(m)
     this.changed.emit()
-    this.logEvent(input.kind === 'skill' ? 'skill-learned' : 'memory-added', `${input.source === 'user' ? 'Saved' : 'Learned'}: ${text}`)
+    this.logEvent(input.kind === 'skill' ? 'skill-learned' : 'memory-added', `${input.source === 'user' ? 'Saved' : input.source === 'assistant' ? 'Saved by Maris' : 'Learned'}: ${text}`)
     return { memory: m, merged: false }
   }
 
@@ -167,7 +167,8 @@ class MemoryStore {
       .filter((s) => s.score >= minScore)
       .sort((a, b) => b.score - a.score)
       .slice(0, k)
-      .map(({ m, score }) => ({ memory: this.get(m.id)!, score }))
+      // Without the embedding (as list() gives them), without copying every memory for each hit.
+      .map(({ m: { embedding: _e, embedModel: _m, ...memory }, score }) => ({ memory, score }))
   }
 
   /**

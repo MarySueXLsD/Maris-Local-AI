@@ -51,14 +51,20 @@ export function phoneName(): string {
   return model && !/^K$/.test(model) ? model : 'Android phone'
 }
 
-/** Parse maris://pair?h=192.168.1.20,10.0.0.5&p=7341&c=ABCD-EFGH-JKMN&n=DESKTOP */
-export function parsePairLink(url: string): { hosts: string[]; port: number; code: string; name?: string } | undefined {
+/**
+ * Parse maris://pair?h=192.168.1.20,10.0.0.5&p=7341&c=ABCD-EFGH-JKMN&n=DESKTOP, plus &r=<relay>&m=<room>
+ * when the computer can also be reached through the Maris relay.
+ */
+export function parsePairLink(url: string): { hosts: string[]; port: number; code: string; name?: string; relay?: { url: string; room: string } } | undefined {
   try {
     const u = new URL(url.replace(/^maris:\/\//i, 'http://maris/'))
     const hosts = (u.searchParams.get('h') ?? '').split(',').map((h) => h.trim()).filter(Boolean)
     const code = u.searchParams.get('c') ?? ''
-    if (!hosts.length || !code) return undefined
-    return { hosts, port: Number(u.searchParams.get('p')) || 7341, code, name: u.searchParams.get('n') ?? undefined }
+    const relayUrl = u.searchParams.get('r') ?? ''
+    const room = u.searchParams.get('m') ?? ''
+    const relay = /^wss?:\/\//i.test(relayUrl) && /^[A-Za-z0-9_-]{43}$/.test(room) ? { url: relayUrl.replace(/\/+$/, ''), room } : undefined
+    if ((!hosts.length && !relay) || !code) return undefined
+    return { hosts, port: Number(u.searchParams.get('p')) || 7341, code, name: u.searchParams.get('n') ?? undefined, relay }
   } catch {
     return undefined
   }

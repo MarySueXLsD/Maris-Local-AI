@@ -15,7 +15,7 @@ const KINDS: { value: MemoryKind; label: string }[] = [
   { value: 'person', label: 'Person' },
   { value: 'skill', label: 'Skill' }
 ]
-const SOURCE: Record<Memory['source'], string> = { user: 'Saved by you', learned: 'Learned from a chat', feedback: 'From your feedback' }
+const SOURCE: Record<Memory['source'], string> = { user: 'Saved by you', assistant: 'Saved by Maris in a chat', learned: 'Learned from a chat', feedback: 'From your feedback' }
 const CATEGORY: Record<string, string> = {
   quick: 'small talk',
   chat: 'conversation',

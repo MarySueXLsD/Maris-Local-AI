@@ -1,6 +1,6 @@
 import { ArrowDown, PanelLeft, PanelRight, Upload } from 'lucide-react'
 import { Switch as RSwitch } from 'radix-ui'
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Attachment, ChatMessage } from '@shared/types'
 import { useApp } from '../../store'
 import { CodeEmptyState } from '../code/CodeEmptyState'
@@ -86,7 +86,9 @@ export function ChatView() {
   const [stick, setStick] = useState(true)
   const [dragging, setDragging] = useState(false)
   const [dropped, setDropped] = useState<Attachment[]>([])
-  const approvals = Object.values(approvalsMap)
+  // The same array while the approvals do not change: a new one on every render (every streamed word) made
+  // each message of the chat draw itself again.
+  const approvals = useMemo(() => Object.values(approvalsMap), [approvalsMap])
   const code = mode === 'code'
 
   const onScroll = (): void => {
@@ -176,8 +178,12 @@ export function ChatView() {
                   <div className="selectable mt-2 whitespace-pre-wrap">{conversation.summary}</div>
                 </details>
               )}
-              {messages.map((m) => (
-                <MessageView key={m.id} m={m} approvals={approvals} />
+              {messages.map((m, i) => (
+                // Older messages out of view are not laid out or painted until they scroll into view (a long
+                // Code-mode chat holds hundreds of steps); the last ones, which change, always are.
+                <div key={m.id} className={i < messages.length - 2 ? 'offscreen-lazy' : undefined}>
+                  <MessageView m={m} approvals={approvals} />
+                </div>
               ))}
             </div>
           )}

@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
-import { existsSync, statSync, watch, type FSWatcher } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import os from 'node:os'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -40,11 +40,31 @@ import { settings } from './settings'
 import { monitor } from './system/monitor'
 import { gpuPrograms } from './system/gpuProcs'
 import { log, uid } from './util'
+import { watchTree } from './watchTree'
+import { branchChat, exportChat, undoAnswer } from './chats'
 
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif|bmp)$/i
 
-let watcher: FSWatcher | undefined
-let watchedDir = ''
+/** The open project's folder, watched for the window and for the phone app separately, so neither moves the other's. */
+const watchers = new Map<'desktop' | 'phone', { dir: string; stop: () => void }>()
+
+function watchProject(owner: 'desktop' | 'phone', dir?: string): void {
+  const cur = watchers.get(owner)
+  if ((dir ?? '') === (cur?.dir ?? '')) return
+  cur?.stop()
+  watchers.delete(owner)
+  if (!dir || !existsSync(dir)) return
+  let timer: NodeJS.Timeout | undefined
+  try {
+    const stop = watchTree(dir, () => {
+      clearTimeout(timer)
+      timer = setTimeout(() => broadcast('project:changed', { dir }), 350)
+    })
+    watchers.set(owner, { dir, stop })
+  } catch (e) {
+    log.warn('project', `cannot watch ${dir}`, e)
+  }
+}
 
 export function broadcast(channel: string, payload: unknown): void {
   for (const w of BrowserWindow.getAllWindows()) {
@@ -119,7 +139,7 @@ export function registerIpc(): void {
   h('chat:regenerate', (messageId: string, model?: string, think?: ThinkMode) => agent.regenerate(messageId, model, think))
   h('chat:edit', (messageId: string, text: string) => agent.editAndResend(messageId, text))
   h('chat:feedback', (messageId: string, value: 1 | -1 | 0, note?: string) => agent.feedback(messageId, value, note))
-  h('chat:approve', (id: string, approved: boolean, rule?: ApprovalRule | boolean) => approvals.respond(id, approved, rule))
+  h('chat:approve', (id: string, approved: boolean, rule?: ApprovalRule | boolean, note?: string) => approvals.respond(id, approved, rule, note))
   h('chat:autoEdits', (conversationId: string, on: boolean) => agent.setAutoEdits(conversationId, on))
   h('chat:compact', (conversationId: string) => agent.compact(conversationId))
   h('chat:context', (conversationId?: string, draft?: { mode?: ChatMode; projectDir?: string; model?: string }) => agent.contextUsage(conversationId, draft))
@@ -175,6 +195,14 @@ export function registerIpc(): void {
   })
   h('conv:search', (q: string) => repo.searchMessages(q, 30))
   h('conv:running', () => agent.runningIds())
+  h('conv:export', (id: string, format?: string) => exportChat(id, format === 'json' ? 'json' : 'md'))
+  h('conv:branch', (messageId: string) => {
+    const c = branchChat(messageId)
+    broadcast('chat:event', { type: 'conversation', conversation: c })
+    return c
+  })
+  // "Undo changes" on an answer (the window shows what it will do first, from the same plan).
+  h('chat:undoAnswer', (messageId: string) => undoAnswer(messageId))
 
   // ---------------------------------------------------------------- models
   h('models:list', async (force?: boolean) => {
@@ -303,7 +331,7 @@ export function registerIpc(): void {
   h('media:jobs', () => media.list())
   h('media:gallery', () => repo.listMedia(300))
   h('media:delete', async (id: string, alsoFile: boolean) => {
-    const item = repo.listMedia(1000).find((m) => m.id === id)
+    const item = repo.getMedia(id)
     repo.deleteMedia(id)
     if (alsoFile && item) await shell.trashItem(item.path).catch(() => undefined)
   })
@@ -394,25 +422,9 @@ export function registerIpc(): void {
     if (recent) return path.dirname(recent.path)
     return path.join(app.getPath('documents'), 'Maris Projects')
   })
-  // The open project's files: tell the window when anything in the folder changes.
-  h('project:watch', (dir?: string) => {
-    if ((dir ?? '') === watchedDir) return
-    watcher?.close()
-    watcher = undefined
-    watchedDir = dir ?? ''
-    if (!dir || !existsSync(dir)) return
-    let timer: NodeJS.Timeout | undefined
-    try {
-      watcher = watch(dir, { recursive: true }, (_event, file) => {
-        if (/(^|[\\/])(\.git|node_modules|__pycache__|\.venv|\.cache)([\\/]|$)/i.test(String(file ?? ''))) return
-        clearTimeout(timer)
-        timer = setTimeout(() => broadcast('project:changed', { dir }), 350)
-      })
-      watcher.on('error', () => undefined)
-    } catch (e) {
-      log.warn('project', `cannot watch ${dir}`, e)
-    }
-  })
+  // The open project's files: tell the window (and the phone) when anything in the folder changes. Maris
+  // Link passes 'phone' as the owner, so a project opened on the phone does not move the window's watcher.
+  h('project:watch', (dir?: string, owner?: string) => watchProject(owner === 'phone' ? 'phone' : 'desktop', dir))
   h('processes:list', (conversationId?: string) => processes.list(conversationId))
   h('processes:output', (id: string, tail?: number) => processes.output(id, tail ?? 200))
   h('processes:stop', (id: string) => processes.stop(id))
@@ -431,6 +443,14 @@ export function registerIpc(): void {
     return r.canceled ? undefined : r.filePaths[0]
   })
   h('files:attach', (paths: string[]) => Promise.all(paths.slice(0, 10).map(fileToAttachment)))
+  // An exported chat (or other text) saved where the person chooses.
+  h('files:saveText', async (name: string, content: string) => {
+    const ext = path.extname(String(name)).slice(1) || 'txt'
+    const r = await dialog.showSaveDialog({ defaultPath: path.join(app.getPath('documents'), path.basename(String(name))), filters: [{ name: ext.toUpperCase(), extensions: [ext] }] })
+    if (r.canceled || !r.filePath) return undefined
+    await fs.writeFile(r.filePath, String(content), 'utf8')
+    return r.filePath
+  })
   h('files:saveImage', async (dataUrl: string) => {
     const dir = path.join(app.getPath('userData'), 'pasted')
     await fs.mkdir(dir, { recursive: true })

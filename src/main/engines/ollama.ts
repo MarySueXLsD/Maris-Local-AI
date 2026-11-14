@@ -4,10 +4,11 @@ import { homedir } from 'node:os'
 import http, { type IncomingMessage } from 'node:http'
 import https from 'node:https'
 import { join } from 'node:path'
-import type { LoadedModel, ModelInfo, PullProgress } from '@shared/types'
+import type { LoadedModel, ModelInfo, PullProgress, Settings } from '@shared/types'
 import { settings } from '../settings'
 import { estimateTokens, log, sleep } from '../util'
 import { isRunnerCrash } from './errors'
+import { serverEnv } from './serverEnv'
 import { CapabilityError, type LlmChunk, type LlmMessage, type LlmRequest, type LlmResult } from './types'
 
 /** Maris's messages as Ollama takes them: without the fields only other engines use. */
@@ -439,6 +440,16 @@ class OllamaClient {
 
   /** The `ollama serve` Maris started itself, where no tray or menu-bar app runs the server. */
   private served?: number
+  /** How that server stores context windows (it applies only to a server Maris started). */
+  private servedKv?: Settings['engine']['kvCache']
+
+  /**
+   * How much memory a context window takes compared with Ollama's default (f16): 0.5 with q8_0, 0.25 with
+   * q4_0. Known only for a server Maris started; one started otherwise counts as the default.
+   */
+  kvScale(): number {
+    return this.servedKv === 'q4_0' ? 0.25 : this.servedKv === 'q8_0' ? 0.5 : 1
+  }
 
   /**
    * Maris is closing: unload every model, so nothing of it stays in video memory, and, when asked, stop
@@ -495,8 +506,10 @@ class OllamaClient {
       } else if (cli) {
         // The server by itself: no window and no tray icon appear, and Maris stops it again when it closes.
         // (Ollama's own app opens its chat window when it is started, which is not what starting Maris should do.)
-        const p = spawn(cli, ['serve'], { detached: true, stdio: 'ignore', windowsHide: true })
+        const env = serverEnv(settings.get().engine, process.env)
+        const p = spawn(cli, ['serve'], { detached: true, stdio: 'ignore', windowsHide: true, env: { ...process.env, ...env } })
         this.served = p.pid
+        this.servedKv = (env.OLLAMA_KV_CACHE_TYPE as Settings['engine']['kvCache'] | undefined) ?? 'f16'
         p.unref()
       } else if (process.platform === 'win32' && existsSync(appPath)) {
         spawn(appPath, [], { detached: true, stdio: 'ignore', windowsHide: true }).unref()

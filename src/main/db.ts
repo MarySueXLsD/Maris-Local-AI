@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import type {
   ChatMessage,
   Conversation,
@@ -9,6 +9,27 @@ import type {
 } from '@shared/types'
 
 let db: DatabaseSync
+
+/** Statements prepared once and reused: preparing is a parse and plan of the SQL each time. */
+const statements = new Map<string, StatementSync>()
+function q(sql: string): StatementSync {
+  let st = statements.get(sql)
+  if (!st) statements.set(sql, (st = db.prepare(sql)))
+  return st
+}
+
+/** Several writes as one: one commit to disk instead of one each. */
+function inTransaction<T>(fn: () => T): T {
+  db.exec('BEGIN')
+  try {
+    const out = fn()
+    db.exec('COMMIT')
+    return out
+  } catch (e) {
+    db.exec('ROLLBACK')
+    throw e
+  }
+}
 
 const SCHEMA = `
 PRAGMA journal_mode = WAL;
@@ -111,6 +132,7 @@ const MIGRATIONS: [table: string, column: string, ddl: string][] = [
 ]
 
 export function openDb(path: string): void {
+  statements.clear()
   db = new DatabaseSync(path)
   db.exec(SCHEMA)
   for (const [table, column, ddl] of MIGRATIONS) {
@@ -120,6 +142,13 @@ export function openDb(path: string): void {
 }
 
 export function closeDb(): void {
+  try {
+    // Keeps SQLite's statistics current for the next start (cheap: it only looks at what changed).
+    db?.exec('PRAGMA optimize')
+  } catch {
+    /* not open */
+  }
+  statements.clear()
   try {
     db?.close()
   } catch {
@@ -196,11 +225,11 @@ function ftsQuery(q: string): string {
 export const repo = {
   // ------------------------------------------------------------ kv
   getKv<T>(key: string): T | undefined {
-    const r = db.prepare('SELECT value FROM kv WHERE key = ?').get(key) as Row | undefined
+    const r = q('SELECT value FROM kv WHERE key = ?').get(key) as Row | undefined
     return r ? (JSON.parse(String(r.value)) as T) : undefined
   },
   setKv(key: string, value: unknown): void {
-    db.prepare('INSERT INTO kv(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(
+    q('INSERT INTO kv(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(
       key,
       JSON.stringify(value)
     )
@@ -217,11 +246,11 @@ export const repo = {
     return rows.map(toConversation)
   },
   getConversation(id: string): Conversation | undefined {
-    const r = db.prepare('SELECT * FROM conversations WHERE id = ?').get(id) as Row | undefined
+    const r = q('SELECT * FROM conversations WHERE id = ?').get(id) as Row | undefined
     return r ? toConversation(r) : undefined
   },
   upsertConversation(c: Conversation): void {
-    db.prepare(
+    q(
       `INSERT INTO conversations(id, title, created_at, updated_at, pinned, model, mode, project_dir, auto_edits, origin)
        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at,
@@ -229,36 +258,36 @@ export const repo = {
     ).run(c.id, c.title, c.createdAt, c.updatedAt, c.pinned ? 1 : 0, c.model, c.mode ?? 'chat', c.projectDir ?? null, c.autoEdits ? 1 : 0, c.origin ?? null)
   },
   setSummary(id: string, summary: string | null, until: number | null): void {
-    db.prepare('UPDATE conversations SET summary = ?, summary_until = ? WHERE id = ?').run(summary, until, id)
+    q('UPDATE conversations SET summary = ?, summary_until = ? WHERE id = ?').run(summary, until, id)
   },
 
   // ------------------------------------------------------------ projects
   listProjects(): Project[] {
-    return (db.prepare('SELECT * FROM projects ORDER BY last_opened DESC LIMIT 30').all() as Row[]).map(toProject)
+    return (q('SELECT * FROM projects ORDER BY last_opened DESC LIMIT 30').all() as Row[]).map(toProject)
   },
   getProject(path: string): Project | undefined {
-    const r = db.prepare('SELECT * FROM projects WHERE lower(path) = lower(?)').get(path) as Row | undefined
+    const r = q('SELECT * FROM projects WHERE lower(path) = lower(?)').get(path) as Row | undefined
     return r ? toProject(r) : undefined
   },
   upsertProject(p: Project): void {
-    db.prepare(
+    q(
       `INSERT INTO projects(path, name, last_opened, json) VALUES(?, ?, ?, ?)
        ON CONFLICT(path) DO UPDATE SET name = excluded.name, last_opened = excluded.last_opened, json = excluded.json`
     ).run(p.path, p.name, p.lastOpened, JSON.stringify({ allowedCommands: p.allowedCommands, stack: p.stack, description: p.description }))
   },
   removeProject(path: string): void {
-    db.prepare('DELETE FROM projects WHERE lower(path) = lower(?)').run(path)
+    q('DELETE FROM projects WHERE lower(path) = lower(?)').run(path)
   },
   deleteConversation(id: string): void {
-    db.prepare('DELETE FROM messages_fts WHERE conversation_id = ?').run(id)
-    db.prepare('DELETE FROM conversations WHERE id = ?').run(id)
+    q('DELETE FROM messages_fts WHERE conversation_id = ?').run(id)
+    q('DELETE FROM conversations WHERE id = ?').run(id)
   },
   getLearnedUntil(id: string): number {
-    const r = db.prepare('SELECT learned_until FROM conversations WHERE id = ?').get(id) as Row | undefined
+    const r = q('SELECT learned_until FROM conversations WHERE id = ?').get(id) as Row | undefined
     return r ? Number(r.learned_until) : 0
   },
   setLearnedUntil(id: string, ts: number): void {
-    db.prepare('UPDATE conversations SET learned_until = ? WHERE id = ?').run(ts, id)
+    q('UPDATE conversations SET learned_until = ? WHERE id = ?').run(ts, id)
   },
 
   // ------------------------------------------------------------ messages
@@ -269,27 +298,26 @@ export const repo = {
     return rows.map((r) => JSON.parse(String(r.json)) as ChatMessage)
   },
   getMessage(id: string): ChatMessage | undefined {
-    const r = db.prepare('SELECT json FROM messages WHERE id = ?').get(id) as Row | undefined
+    const r = q('SELECT json FROM messages WHERE id = ?').get(id) as Row | undefined
     return r ? (JSON.parse(String(r.json)) as ChatMessage) : undefined
   },
   saveMessage(m: ChatMessage): void {
-    db.prepare(
-      `INSERT INTO messages(id, conversation_id, role, created_at, json) VALUES(?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET json = excluded.json`
-    ).run(m.id, m.conversationId, m.role, m.createdAt, JSON.stringify(m))
-    db.prepare('DELETE FROM messages_fts WHERE message_id = ?').run(m.id)
-    const text = messageText(m)
-    if (text.trim()) {
-      db.prepare('INSERT INTO messages_fts(content, message_id, conversation_id) VALUES(?, ?, ?)').run(
-        text,
-        m.id,
-        m.conversationId
-      )
-    }
+    inTransaction(() => {
+      q(
+        `INSERT INTO messages(id, conversation_id, role, created_at, json) VALUES(?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET json = excluded.json`
+      ).run(m.id, m.conversationId, m.role, m.createdAt, JSON.stringify(m))
+      // An answer is saved after every step while it is written; it goes into the search index once, when
+      // it is finished, instead of all of its text again each time.
+      if (m.status === 'streaming' || m.status === 'waiting') return
+      q('DELETE FROM messages_fts WHERE message_id = ?').run(m.id)
+      const text = messageText(m)
+      if (text.trim()) q('INSERT INTO messages_fts(content, message_id, conversation_id) VALUES(?, ?, ?)').run(text, m.id, m.conversationId)
+    })
   },
   deleteMessage(id: string): void {
-    db.prepare('DELETE FROM messages_fts WHERE message_id = ?').run(id)
-    db.prepare('DELETE FROM messages WHERE id = ?').run(id)
+    q('DELETE FROM messages_fts WHERE message_id = ?').run(id)
+    q('DELETE FROM messages WHERE id = ?').run(id)
   },
   searchMessages(q: string, limit = 20): { conversationId: string; messageId: string; snippet: string; title: string }[] {
     const query = ftsQuery(q)
@@ -315,7 +343,7 @@ export const repo = {
 
   // ------------------------------------------------------------ memories
   listMemories(): (Memory & { embedding?: Float32Array; embedModel?: string })[] {
-    const rows = db.prepare('SELECT * FROM memories ORDER BY pinned DESC, updated_at DESC').all() as Row[]
+    const rows = q('SELECT * FROM memories ORDER BY pinned DESC, updated_at DESC').all() as Row[]
     return rows.map((r) => {
       const m = toMemory(r) as Memory & { embedding?: Float32Array; embedModel?: string }
       const blob = r.embedding as Uint8Array | null
@@ -327,7 +355,7 @@ export const repo = {
     })
   },
   insertMemory(m: Memory, embedding?: Float32Array, embedModel?: string): void {
-    db.prepare(
+    q(
       `INSERT INTO memories(id, text, kind, source, importance, pinned, uses, created_at, updated_at, last_used_at,
          conversation_id, embedding, embed_model) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
@@ -347,11 +375,11 @@ export const repo = {
     )
   },
   updateMemory(m: Memory, embedding?: Float32Array, embedModel?: string): void {
-    db.prepare(
+    q(
       `UPDATE memories SET text = ?, kind = ?, importance = ?, pinned = ?, uses = ?, updated_at = ?, last_used_at = ? WHERE id = ?`
     ).run(m.text, m.kind, m.importance, m.pinned ? 1 : 0, m.uses, m.updatedAt, m.lastUsedAt ?? null, m.id)
     if (embedding) {
-      db.prepare('UPDATE memories SET embedding = ?, embed_model = ? WHERE id = ?').run(
+      q('UPDATE memories SET embedding = ?, embed_model = ? WHERE id = ?').run(
         new Uint8Array(embedding.buffer, embedding.byteOffset, embedding.byteLength),
         embedModel ?? null,
         m.id
@@ -359,20 +387,20 @@ export const repo = {
     }
   },
   touchMemories(ids: string[], ts: number): void {
-    const st = db.prepare('UPDATE memories SET uses = uses + 1, last_used_at = ? WHERE id = ?')
+    const st = q('UPDATE memories SET uses = uses + 1, last_used_at = ? WHERE id = ?')
     for (const id of ids) st.run(ts, id)
   },
   deleteMemory(id: string): void {
-    db.prepare('DELETE FROM memories WHERE id = ?').run(id)
+    q('DELETE FROM memories WHERE id = ?').run(id)
   },
 
   // ------------------------------------------------------------ learning events
   addEvent(e: LearningEvent): void {
-    db.prepare('INSERT INTO learning_events(id, ts, kind, text) VALUES(?, ?, ?, ?)').run(e.id, e.ts, e.kind, e.text)
-    db.prepare('DELETE FROM learning_events WHERE id NOT IN (SELECT id FROM learning_events ORDER BY ts DESC LIMIT 300)').run()
+    q('INSERT INTO learning_events(id, ts, kind, text) VALUES(?, ?, ?, ?)').run(e.id, e.ts, e.kind, e.text)
+    q('DELETE FROM learning_events WHERE id NOT IN (SELECT id FROM learning_events ORDER BY ts DESC LIMIT 300)').run()
   },
   listEvents(limit = 100): LearningEvent[] {
-    const rows = db.prepare('SELECT * FROM learning_events ORDER BY ts DESC LIMIT ?').all(limit) as Row[]
+    const rows = q('SELECT * FROM learning_events ORDER BY ts DESC LIMIT ?').all(limit) as Row[]
     return rows.map((r) => ({
       id: String(r.id),
       ts: Number(r.ts),
@@ -383,7 +411,7 @@ export const repo = {
 
   // ------------------------------------------------------------ routing stats
   routeStats(): { category: string; tier: string; score: number; n: number }[] {
-    return (db.prepare('SELECT * FROM route_stats').all() as Row[]).map((r) => ({
+    return (q('SELECT * FROM route_stats').all() as Row[]).map((r) => ({
       category: String(r.category),
       tier: String(r.tier),
       score: Number(r.score),
@@ -391,32 +419,36 @@ export const repo = {
     }))
   },
   bumpRouteStat(category: string, tier: string, delta: number): void {
-    db.prepare(
+    q(
       `INSERT INTO route_stats(category, tier, score, n) VALUES(?, ?, ?, 1)
        ON CONFLICT(category, tier) DO UPDATE SET score = MAX(-5, MIN(5, score * 0.95 + excluded.score)), n = n + 1`
     ).run(category, tier, delta)
   },
   resetRouteStats(): void {
-    db.prepare('DELETE FROM route_stats').run()
+    q('DELETE FROM route_stats').run()
   },
 
   // ------------------------------------------------------------ media
   addMedia(r: MediaResult): void {
-    db.prepare('INSERT OR REPLACE INTO media(id, created_at, json) VALUES(?, ?, ?)').run(r.id, r.createdAt, JSON.stringify(r))
+    q('INSERT OR REPLACE INTO media(id, created_at, json) VALUES(?, ?, ?)').run(r.id, r.createdAt, JSON.stringify(r))
+  },
+  getMedia(id: string): MediaResult | undefined {
+    const r = q('SELECT json FROM media WHERE id = ?').get(id) as Row | undefined
+    return r ? (JSON.parse(String(r.json)) as MediaResult) : undefined
   },
   listMedia(limit = 200): MediaResult[] {
-    return (db.prepare('SELECT json FROM media ORDER BY created_at DESC LIMIT ?').all(limit) as Row[]).map(
+    return (q('SELECT json FROM media ORDER BY created_at DESC LIMIT ?').all(limit) as Row[]).map(
       (r) => JSON.parse(String(r.json)) as MediaResult
     )
   },
   deleteMedia(id: string): void {
-    db.prepare('DELETE FROM media WHERE id = ?').run(id)
+    q('DELETE FROM media WHERE id = ?').run(id)
   },
 
   // ------------------------------------------------------------ use of API models
   /** Add one request to its day's line for that model. */
   addApiUsage(u: ApiUsageRow): void {
-    db.prepare(
+    q(
       `INSERT INTO api_usage(day, provider, provider_name, model, requests, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, cost, unpriced)
        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(day, provider, model) DO UPDATE SET
@@ -432,7 +464,7 @@ export const repo = {
   },
   /** Every line from a day on (all of them without one), oldest first. */
   apiUsage(sinceDay?: string): ApiUsageRow[] {
-    const rows = (sinceDay ? db.prepare('SELECT * FROM api_usage WHERE day >= ? ORDER BY day').all(sinceDay) : db.prepare('SELECT * FROM api_usage ORDER BY day').all()) as Row[]
+    const rows = (sinceDay ? q('SELECT * FROM api_usage WHERE day >= ? ORDER BY day').all(sinceDay) : q('SELECT * FROM api_usage ORDER BY day').all()) as Row[]
     return rows.map((r) => ({
       day: String(r.day),
       provider: String(r.provider),
@@ -448,7 +480,7 @@ export const repo = {
     }))
   },
   clearApiUsage(): void {
-    db.prepare('DELETE FROM api_usage').run()
+    q('DELETE FROM api_usage').run()
   }
 }
 
